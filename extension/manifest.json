@@ -41,11 +41,11 @@
 		"notifications"
 	],
 	"host_permissions": [
-    "*://claude.ai/*",
-    "https://raw.githubusercontent.com/*",
-    "https://github.com/*",
-    "https://api.anthropic.com/*",
-    "https://usageos.example.com/*"
+		"*://claude.ai/*",
+		"https://raw.githubusercontent.com/*",
+		"https://github.com/*",
+		"https://api.anthropic.com/*",
+		"https://usageos.example.com/*"
 	],
 	"options_page": "options.html",
 	"web_accessible_resources": [
