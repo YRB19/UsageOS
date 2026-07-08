@@ -1,4 +1,13 @@
-import { AtlasSync } from './bg-components/atlasSync.js';
+import { atlasSync as AtlasSync } from './bg-components/atlasSync.js';
+
+// NOTE: atlasSync.js exports a singleton instance (`atlasSync`), not the
+// `AtlasSync` class. The locals below used to dereference a non-existent
+// named export, which silently bound to `undefined` and threw inside the
+// async click handlers — swallowing the error, never writing to storage,
+// and never firing a fetch (hence zero Network-tab activity on Save).
+// We alias the singleton import to `AtlasSync` so the rest of this file
+// can keep calling AtlasSync.getSettings/saveSettings/testConnection —
+// all of which are instance methods on the singleton.
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -44,6 +53,11 @@ document.getElementById('save-atlas').addEventListener('click', async () => {
 	}
 
 	await AtlasSync.saveSettings(url, apiKey);
+	// Notify background service worker to drop its cached config so the
+	// next sync() reads the freshly-saved settings.
+	try {
+		await chrome.runtime.sendMessage({ type: 'atlasRefreshSettings' });
+	} catch (_) { /* background might be asleep */ }
 	showStatus('atlas-status', 'Settings saved.', 'ok');
 });
 
@@ -62,6 +76,8 @@ document.getElementById('test-atlas').addEventListener('click', async () => {
 	console.log('[Options] Calling AtlasSync.testConnection() directly...');
 	try {
 		const result = await AtlasSync.testConnection();
+		// Also poke the background so its singleton stays in sync
+		await chrome.runtime.sendMessage({ type: 'atlasRefreshSettings' });
 		console.log('[Options] testConnection result:', result);
 
 		if (result?.ok) {

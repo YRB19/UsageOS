@@ -38,14 +38,21 @@ class AtlasSync {
 	// ─── Initialisation ──────────────────────────────────────────────────────────
 
 	async init(force = false) {
-		if (this._ready && !force) return;
-		if (this._initPromise)     return this._initPromise;
+		// Re-read settings whenever explicitly asked OR whenever the cached
+		// config is missing/blank. Earlier code short-circuited on `_ready`
+		// alone, which meant a sync() that ran *before* the user saved their
+		// ATLAS settings would cache `_baseUrl=null, _apiKey=null, _ready=true`
+		// — and every later sync() then bailed out at `isConfigured()` even
+		// after they had saved. Settings reads are cheap (chrome.storage.local
+		// is async but not network-bound), so always re-read if unconfigured.
+		if (this._ready && !force && this._baseUrl && this._apiKey) return;
+		if (this._initPromise)                                  return this._initPromise;
 
 		this._initPromise = (async () => {
-			const { url, apiKey } = await AtlasSync.getSettings();
+			const { url, apiKey } = await this.getSettings();
 			this._baseUrl  = url?.replace(/\/$/, '') || null;
 			this._apiKey   = apiKey || null;
-			this._ready    = true;
+			this._ready     = true;
 		})();
 
 		await this._initPromise;
@@ -54,13 +61,13 @@ class AtlasSync {
 
 	// ─── Settings (stored in chrome.storage.local) ────────────────────────────
 
-	static async getSettings() {
+	async getSettings() {
 		const url    = await getStorageValue('atlasUrl',    '');
 		const apiKey = await getStorageValue('atlasApiKey', '');
 		return { url, apiKey };
 	}
 
-	static async saveSettings(url, apiKey) {
+	async saveSettings(url, apiKey) {
 		await setStorageValue('atlasUrl',    url?.trim()    || '');
 		await setStorageValue('atlasApiKey', apiKey?.trim() || '');
 	}
