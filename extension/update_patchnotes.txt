@@ -1,0 +1,2 @@
+Fix language display in popup
+Add language override to settings

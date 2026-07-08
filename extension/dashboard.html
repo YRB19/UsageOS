@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<title>Claude Usage Dashboard</title>
+	<link rel="stylesheet" href="tracker-styles.css">
+	<style>
+		:root {
+			--bg-primary: #1e1e1e;
+			--bg-secondary: #252526;
+			--bg-card: #2a2a2c;
+			--text-primary: #d4d4d4;
+			--text-secondary: #9cdcfe;
+			--text-muted: #8a8a8a;
+			--button-bg: #2d2d2d;
+			--button-hover: #3e3e3e;
+			--button-active: #505050;
+			--border-color: #3e3e3e;
+			--accent: #d97757;
+			--green: #4ade80;
+			--amber: #f0a93f;
+			--red: #e2554f;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			padding: 0;
+			background-color: var(--bg-primary);
+			color: var(--text-primary);
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			font-size: 14px;
+			line-height: 1.5;
+		}
+
+		.dash-wrap {
+			max-width: 760px;
+			margin: 0 auto;
+			padding: 28px 20px 60px;
+		}
+
+		.dash-top {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			margin-bottom: 28px;
+		}
+
+		.dash-logo {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-size: 16px;
+			font-weight: 600;
+		}
+
+		.dash-logo .dot {
+			width: 10px;
+			height: 10px;
+			border-radius: 50%;
+			background: var(--accent);
+		}
+
+		.dash-actions { display: flex; gap: 8px; }
+
+		.dash-btn {
+			background: var(--button-bg);
+			color: var(--text-primary);
+			border: 1px solid var(--border-color);
+			padding: 7px 14px;
+			border-radius: 6px;
+			cursor: pointer;
+			font-size: 13px;
+		}
+
+		.dash-btn:hover { background: var(--button-hover); }
+		.dash-btn:active { background: var(--button-active); }
+
+		.dash-btn.primary {
+			background: var(--accent);
+			border-color: var(--accent);
+			color: #1a1a1a;
+			font-weight: 600;
+		}
+
+		.dash-btn.primary:hover { filter: brightness(1.08); }
+
+		.section-label {
+			font-size: 11px;
+			text-transform: uppercase;
+			letter-spacing: 0.06em;
+			color: var(--text-muted);
+			margin-bottom: 12px;
+			font-weight: 600;
+		}
+
+		.account-card {
+			background: var(--bg-card);
+			border: 1px solid var(--border-color);
+			border-radius: 10px;
+			padding: 16px 18px;
+			margin-bottom: 14px;
+		}
+
+		.card-top {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			margin-bottom: 14px;
+		}
+
+		.avatar {
+			width: 38px;
+			height: 38px;
+			border-radius: 50%;
+			background: var(--accent);
+			color: #1a1a1a;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-weight: 700;
+			font-size: 13px;
+			flex-shrink: 0;
+		}
+
+		.card-meta { flex: 1; min-width: 0; }
+
+		.nickname-input {
+			background: transparent;
+			border: none;
+			color: var(--text-primary);
+			font-size: 14px;
+			font-weight: 600;
+			padding: 2px 0;
+			width: 100%;
+			border-bottom: 1px solid transparent;
+		}
+
+		.nickname-input:hover, .nickname-input:focus {
+			border-bottom: 1px solid var(--border-color);
+			outline: none;
+		}
+
+		.card-email {
+			font-size: 12px;
+			color: var(--text-muted);
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.status-badge {
+			font-size: 11px;
+			padding: 3px 9px;
+			border-radius: 99px;
+			font-weight: 600;
+			white-space: nowrap;
+			flex-shrink: 0;
+		}
+
+		.badge-ok { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+		.badge-warn { background: rgba(240, 169, 63, 0.15); color: var(--amber); }
+		.badge-maxed { background: rgba(226, 85, 79, 0.15); color: var(--red); }
+
+		.meters {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+			gap: 12px;
+			margin-bottom: 12px;
+		}
+
+		.meter-label {
+			font-size: 11px;
+			color: var(--text-muted);
+			margin-bottom: 4px;
+			display: flex;
+			justify-content: space-between;
+		}
+
+		.meter-pct { font-weight: 600; color: var(--text-primary); }
+
+		.bar-track {
+			height: 5px;
+			background: #1a1a1a;
+			border-radius: 3px;
+			overflow: hidden;
+		}
+
+		.bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+
+		.reset-text {
+			font-size: 11px;
+			color: var(--text-muted);
+			margin-top: 2px;
+		}
+
+		.note-area { margin-top: 14px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+
+		.note-label {
+			font-size: 11px;
+			color: var(--text-muted);
+			margin-bottom: 6px;
+			display: flex;
+			align-items: center;
+			gap: 5px;
+		}
+
+		.note-input {
+			width: 100%;
+			background: #1f1f20;
+			border: 1px solid var(--border-color);
+			border-radius: 6px;
+			color: var(--text-primary);
+			font-size: 13px;
+			font-family: inherit;
+			padding: 8px 10px;
+			resize: vertical;
+			min-height: 44px;
+		}
+
+		.note-input:focus { outline: none; border-color: var(--accent); }
+		.note-input::placeholder { color: #5a5a5a; }
+
+		.note-saved {
+			font-size: 11px;
+			color: var(--green);
+			opacity: 0;
+			transition: opacity 0.3s ease;
+			margin-left: 6px;
+		}
+
+		.note-saved.show { opacity: 1; }
+
+		.dash-empty, .dash-loading {
+			color: var(--text-muted);
+			font-size: 13px;
+			padding: 24px 0;
+			text-align: center;
+		}
+
+		.dash-help {
+			font-size: 12px;
+			color: var(--text-muted);
+			margin-top: 24px;
+			line-height: 1.6;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="dash-wrap">
+		<div class="dash-top">
+			<div class="dash-logo"><span class="dot"></span> Claude Usage Dashboard</div>
+			<div class="dash-actions">
+				<button class="dash-btn" id="refresh-btn">Refresh</button>
+				<button class="dash-btn primary" id="add-account-btn">+ Add account</button>
+			</div>
+		</div>
+
+		<div class="section-label">Your accounts</div>
+		<div id="accounts-container">
+			<div class="dash-loading">Loading accounts…</div>
+		</div>
+
+		<p class="dash-help">
+			"Add account" opens claude.ai in a new tab — sign in with a different email there and
+			this dashboard will pick it up automatically. Notes are saved per-account and sync via
+			your browser's account.
+		</p>
+	</div>
+
+	<script src="lib/browser-polyfill.min.js"></script>
+	<script src="content-components/localization.js"></script>
+	<script src="content-components/ui_dataclasses.js"></script>
+	<script src="dashboard.js"></script>
+</body>
+
+</html>

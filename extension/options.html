@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Claude Tracker · ATLAS Settings</title>
+	<link rel="stylesheet" href="tracker-styles.css">
+	<style>
+		body {
+			max-width: 560px;
+			margin: 40px auto;
+			padding: 0 24px 80px;
+		}
+
+		.page-title {
+			font-size: 18px;
+			font-weight: 600;
+			margin-bottom: 4px;
+		}
+
+		.page-sub {
+			font-size: 13px;
+			color: var(--text-muted, #8a8a8a);
+			margin-bottom: 32px;
+		}
+
+		.section {
+			background: var(--background-secondary, #252526);
+			border: 1px solid var(--border-color, #3e3e3e);
+			border-radius: 10px;
+			padding: 20px 22px;
+			margin-bottom: 18px;
+		}
+
+		.section-title {
+			font-size: 13px;
+			font-weight: 600;
+			margin-bottom: 14px;
+			display: flex;
+			align-items: center;
+			gap: 7px;
+		}
+
+		.badge-atlas {
+			font-size: 10px;
+			background: #d97757;
+			color: #1a1a1a;
+			padding: 2px 7px;
+			border-radius: 99px;
+			font-weight: 700;
+		}
+
+		label {
+			display: block;
+			font-size: 12px;
+			color: var(--text-muted, #8a8a8a);
+			margin-bottom: 5px;
+		}
+
+		input[type="text"],
+		input[type="url"],
+		input[type="password"] {
+			width: 100%;
+			box-sizing: border-box;
+			background: var(--background-primary, #1e1e1e);
+			border: 1px solid var(--border-color, #3e3e3e);
+			border-radius: 6px;
+			color: var(--text-primary, #d4d4d4);
+			font-size: 13px;
+			padding: 8px 10px;
+			font-family: inherit;
+			margin-bottom: 12px;
+		}
+
+		input:focus {
+			outline: none;
+			border-color: #d97757;
+		}
+
+		.row {
+			display: flex;
+			gap: 8px;
+			align-items: center;
+		}
+
+		.btn {
+			padding: 8px 16px;
+			border-radius: 6px;
+			font-size: 13px;
+			font-weight: 500;
+			cursor: pointer;
+			border: 1px solid var(--border-color, #3e3e3e);
+			background: var(--background-secondary, #252526);
+			color: var(--text-primary, #d4d4d4);
+			white-space: nowrap;
+		}
+
+		.btn:hover { filter: brightness(1.15); }
+		.btn:active { filter: brightness(0.9); }
+
+		.btn-primary {
+			background: #d97757;
+			border-color: #d97757;
+			color: #1a1a1a;
+			font-weight: 700;
+		}
+
+		.status {
+			font-size: 12px;
+			padding: 6px 10px;
+			border-radius: 6px;
+			margin-top: 10px;
+			display: none;
+		}
+
+		.status.show { display: block; }
+		.status.ok   { background: rgba(74,222,128,.12); color: #4ade80; }
+		.status.err  { background: rgba(226,85,79,.12);  color: #e2554f; }
+		.status.info { background: rgba(217,119,87,.12); color: #d97757; }
+
+		.hint {
+			font-size: 11px;
+			color: var(--text-muted, #8a8a8a);
+			margin-top: -8px;
+			margin-bottom: 12px;
+			line-height: 1.5;
+		}
+
+		.divider {
+			border: none;
+			border-top: 1px solid var(--border-color, #3e3e3e);
+			margin: 16px 0;
+		}
+	</style>
+</head>
+<body>
+	<div class="page-title">Claude Usage Tracker</div>
+	<div class="page-sub">Settings &amp; ATLAS Integration</div>
+
+	<!-- ── ATLAS Sync ──────────────────────────── -->
+	<div class="section">
+		<div class="section-title">
+			ATLAS Sync <span class="badge-atlas">ATLAS</span>
+		</div>
+
+		<label for="atlas-url">Server URL</label>
+		<input type="url" id="atlas-url" placeholder="https://atlas-api.yourdomain.com" autocomplete="off">
+		<div class="hint">The base URL of your ATLAS FastAPI backend. Include protocol, no trailing slash.</div>
+
+		<label for="atlas-key">API Key</label>
+		<input type="password" id="atlas-key" placeholder="your-atlas-api-key" autocomplete="off">
+		<div class="hint">Set this in your ATLAS <code>.env</code> as <code>ATLAS_API_KEY</code>.</div>
+
+		<div class="row">
+			<button class="btn btn-primary" id="save-atlas">Save</button>
+			<button class="btn" id="test-atlas">Test connection</button>
+		</div>
+
+		<div class="status" id="atlas-status"></div>
+	</div>
+
+	<!-- ── Anthropic API key (existing feature) ── -->
+	<div class="section">
+		<div class="section-title">Anthropic API Key (optional)</div>
+		<label for="anthropic-key">Key</label>
+		<input type="password" id="anthropic-key" placeholder="sk-ant-..." autocomplete="off">
+		<div class="hint">Used for accurate token counting instead of the local GPT tokenizer.</div>
+		<div class="row">
+			<button class="btn btn-primary" id="save-anthropic">Save</button>
+			<button class="btn" id="clear-anthropic">Clear</button>
+		</div>
+		<div class="status" id="anthropic-status"></div>
+	</div>
+
+	<!-- ── Notifications ── -->
+	<div class="section">
+		<div class="section-title">Notifications</div>
+		<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+			<input type="checkbox" id="reset-notif">
+			<span style="font-size:13px;color:var(--text-primary,#d4d4d4)">Notify me when usage limits reset</span>
+		</label>
+	</div>
+
+	<script src="lib/browser-polyfill.min.js"></script>
+	<script src="options.js" type="module"></script>
+</body>
+</html>
