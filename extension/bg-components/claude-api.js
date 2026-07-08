@@ -147,16 +147,29 @@ class ClaudeAPI {
 	async getAccountEmail() {
 		const cacheKey = this.cookieStoreId || 'default';
 		const cached = await accountEmailCache.get(cacheKey);
-		if (cached !== undefined) return cached;
+		if (cached !== undefined && cached !== null) return cached;  // don't cache null
 
 		try {
 			const profileData = await this.getRequest('/account_profile');
-			const email = profileData?.email_address || profileData?.email || null;
-			await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+			// Broaden field lookup — add more after seeing diagnostic log
+			const email = profileData?.email_address 
+				|| profileData?.email 
+				|| profileData?.user?.email 
+				|| profileData?.account?.email 
+				|| profileData?.emailAddress 
+				|| null;
+			
+			if (!email) {
+				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", profileData);
+			}
+			
+			if (email) {
+				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+			}
 			return email;
 		} catch (error) {
 			await Log("warn", "Failed to fetch account email:", error);
-			return null;
+			return null;  // not cached
 		}
 	}
 

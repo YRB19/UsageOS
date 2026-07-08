@@ -467,6 +467,29 @@ browser.runtime.onMessage.addListener(async (message) => {
 		}
 		return Promise.resolve({ styleId });
 	}
+	if (message.action === "getAccountEmail") {
+		try {
+			const response = await fetch('/api/account_profile', {
+				credentials: 'include'
+			});
+			const data = await response.json();
+			// Broaden field lookup — add more after seeing diagnostic log
+			const email = data?.email_address 
+				|| data?.email 
+				|| data?.user?.email 
+				|| data?.account?.email 
+				|| data?.emailAddress 
+				|| null;
+			
+			if (!email) {
+				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", data);
+			}
+			return Promise.resolve({ email });
+		} catch (e) {
+			await Log("warn", "Content script failed to fetch account email:", e);
+			return Promise.resolve({ email: null });
+		}
+	}
 });
 
 // Style injection

@@ -222,6 +222,18 @@ async function logError(error) {
 	await Log("error", JSON.stringify(error.stack));
 }
 
+// Get account email from content script (page context has correct cookies)
+async function getAccountEmailFromContent(tabId) {
+	try {
+		const response = await sendTabMessage(tabId, {
+			action: "getAccountEmail"
+		});
+		return response?.email || null;
+	} catch (error) {
+		await Log("warn", "Error getting email from content script:", error);
+		return null;
+	}
+}
 
 //#endregion
 
@@ -254,6 +266,19 @@ async function requestActiveOrgId(tab) {
 		return response?.orgId;
 	} catch (error) {
 		await Log("error", "Error getting org ID from content script:", error);
+		return null;
+	}
+}
+
+// Get account email from content script (page context has correct cookies)
+async function getAccountEmailFromContent(tabId) {
+	try {
+		const response = await sendTabMessage(tabId, {
+			action: "getAccountEmail"
+		});
+		return response?.email || null;
+	} catch (error) {
+		await Log("warn", "Error getting email from content script:", error);
 		return null;
 	}
 }
@@ -456,7 +481,14 @@ async function getPopupUsageData() {
 			const api = new ClaudeAPI(cookieStoreId, orgId);
 			const usageData = await api.getUsageData();
 			const org = await api.getOrgInfo(); // cache hit — getUsageData already fetched it
-			const email = await api.getAccountEmail();
+				.getOrgInfo();
+			let email = null;
+			if (sender?.tab?.id) {
+				email = await getAccountEmailFromContent(sender.tab.id);
+			}
+			if (!email) {
+				email = await api.getAccountEmail();
+			}
 			return {
 				orgId,
 				orgName: org?.name || null,
@@ -677,7 +709,7 @@ async function processResponse(orgId, conversationId, responseKey, details) {
 
 	// Sync to ATLAS (non-blocking — failures are queued)
 	try {
-		const email = await api.getAccountEmail();
+		const email = await getAccountEmailFromContent(tabId);
 		atlasSync.sync(orgId, email, usageData).catch(() => {});
 	} catch (err) {
 		await Log('warn', 'ATLAS sync error in processResponse:', err);
@@ -1029,6 +1061,14 @@ getAlarm('checkResetNotifications').then(existing => {
 
 // ATLAS: expose test-connection to options page
 messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
+
+// ATLAS: when the options page saves settings, force the background's
+// atlasSync singleton to drop its cached config so the next sync() reads
+// the freshly-stored URL/key. Without this, a service worker that was
+// warm before the user saved would keep `_ready=true` with stale (often
+// empty) `_baseUrl/_apiKey`, and sync() would silently bail as
+// "not_configured".
+messageRegistry.register('atlasRefreshSettings', () => atlasSync.init(true));
 
 isInitialized = true;
 for (const handler of functionsPendingUntilInitialization) {

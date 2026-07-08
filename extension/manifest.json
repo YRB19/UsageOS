@@ -21,10 +21,10 @@
       "js": [
         "lib/browser-polyfill.min.js",
         "lib/o200k_base.js",
-        "shared/localization.js",
+        "content-components/localization.js",
         "content-components/content_utils.js",
         "content-components/electron_reciever.js",
-        "shared/dataclasses.js",
+        "content-components/ui_dataclasses.js",
         "content-components/notification_card.js",
         "content-components/usage_ui.js",
         "content-components/length_ui.js"
