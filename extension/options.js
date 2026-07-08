@@ -4,21 +4,34 @@ import { AtlasSync } from './bg-components/atlasSync.js';
 
 function showStatus(id, msg, type = 'ok') {
 	const el = document.getElementById(id);
+	if (!el) { console.error('[Options] Status element not found:', id); return; }
 	el.textContent = msg;
 	el.className = `status show ${type}`;
 	setTimeout(() => el.classList.remove('show'), 4000);
 }
 
 async function send(type, payload = {}) {
-	return chrome.runtime.sendMessage({ type, ...payload });
+	try {
+		return await chrome.runtime.sendMessage({ type, ...payload });
+	} catch (err) {
+		console.error('[Options] sendMessage failed for', type, err);
+		return null;
+	}
 }
 
 // ─── ATLAS settings ─────────────────────────────────────────────────────────
 
 async function loadAtlasSettings() {
-	const { url, apiKey } = await AtlasSync.getSettings();
-	document.getElementById('atlas-url').value = url || '';
-	document.getElementById('atlas-key').value = apiKey || '';
+	try {
+		const { url, apiKey } = await AtlasSync.getSettings();
+		const urlEl    = document.getElementById('atlas-url');
+		const keyEl   = document.getElementById('atlas-key');
+		if (urlEl)  urlEl.value = url || '';
+		if (keyEl) keyEl.value = apiKey || '';
+		console.log('[Options] Loaded ATLAS settings:', { url, hasKey: !!apiKey });
+	} catch (err) {
+		console.error('[Options] Failed to load ATLAS settings:', err);
+	}
 }
 
 document.getElementById('save-atlas').addEventListener('click', async () => {
@@ -35,28 +48,46 @@ document.getElementById('save-atlas').addEventListener('click', async () => {
 });
 
 document.getElementById('test-atlas').addEventListener('click', async () => {
+	console.log('[Options] Test connection clicked');
 	showStatus('atlas-status', 'Testing…', 'info');
 
 	// Save current inputs before testing
 	const url    = document.getElementById('atlas-url').value.trim();
 	const apiKey = document.getElementById('atlas-key').value.trim();
+	console.log('[Options] Saving before test:', { url, hasKey: !!apiKey });
 	await AtlasSync.saveSettings(url, apiKey);
 
-	const result = await send('atlasTestConnection');
+	// Call testConnection directly — avoids the background message round-trip
+	// which can silently fail if the SW is asleep or the message port closes.
+	console.log('[Options] Calling AtlasSync.testConnection() directly...');
+	try {
+		const result = await AtlasSync.testConnection();
+		console.log('[Options] testConnection result:', result);
 
-	if (result?.ok) {
-		const accts = result.data?.accounts ?? '?';
-		showStatus('atlas-status', `✓ Connected — ${accts} account(s) tracked`, 'ok');
-	} else {
-		showStatus('atlas-status', `✗ ${result?.reason || 'Unknown error'}`, 'err');
+		if (result?.ok) {
+			const accts = result.data?.accounts ?? '?';
+			showStatus('atlas-status', `✓ Connected — ${accts} account(s) tracked`, 'ok');
+		} else {
+			showStatus('atlas-status', `✗ ${result?.reason || 'Unknown error'}`, 'err');
+		}
+	} catch (err) {
+		console.error('[Options] testConnection threw:', err);
+		showStatus('atlas-status', `✗ ${err.message || 'Exception'}`, 'err');
 	}
 });
 
 // ─── Anthropic API key ────────────────────────────────────────────────────────
 
 async function loadAnthropicKey() {
-	const key = await send('getAPIKey');
-	if (key) document.getElementById('anthropic-key').value = key;
+	try {
+		const key = await send('getAPIKey');
+		if (key) {
+			const el = document.getElementById('anthropic-key');
+			if (el) el.value = key;
+		}
+	} catch (err) {
+		console.error('[Options] Failed to load API key:', err);
+	}
 }
 
 document.getElementById('save-anthropic').addEventListener('click', async () => {
@@ -74,8 +105,13 @@ document.getElementById('clear-anthropic').addEventListener('click', async () =>
 // ─── Notifications toggle ──────────────────────────────────────────────────
 
 async function loadNotifSetting() {
-	const enabled = await send('getResetNotifEnabled');
-	document.getElementById('reset-notif').checked = !!enabled;
+	try {
+		const enabled = await send('getResetNotifEnabled');
+		const el = document.getElementById('reset-notif');
+		if (el) el.checked = !!enabled;
+	} catch (err) {
+		console.error('[Options] Failed to load notif setting:', err);
+	}
 }
 
 document.getElementById('reset-notif').addEventListener('change', async (e) => {
@@ -84,6 +120,11 @@ document.getElementById('reset-notif').addEventListener('change', async (e) => {
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
 
-await loadAtlasSettings();
-await loadAnthropicKey();
-await loadNotifSetting();
+// Don't use top-level await — wrap in an async IIFE so one failure doesn't kill the page.
+(async () => {
+	console.log('[Options] Booting options page...');
+	await loadAtlasSettings();
+	await loadAnthropicKey();
+	await loadNotifSetting();
+	console.log('[Options] Boot complete. Click handlers registered.');
+})();

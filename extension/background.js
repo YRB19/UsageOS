@@ -615,10 +615,20 @@ async function processResponse(orgId, conversationId, responseKey, details) {
 
 	// Add modifier costs to conversation data
 	let modifierCost = 0;
-	const profileTokens = await api.getProfileTokens();
+	let profileTokens = 0;
+	try {
+		profileTokens = await api.getProfileTokens();
+	} catch (e) {
+		await Log("warn", "getProfileTokens failed, skipping:", e.message);
+	}
 	modifierCost += profileTokens;
 
-	const styleTokens = await api.getStyleTokens(pendingRequest?.styleId, tabId);
+	let styleTokens = 0;
+	try {
+		styleTokens = await api.getStyleTokens(pendingRequest?.styleId, tabId);
+	} catch (e) {
+		await Log("warn", "getStyleTokens failed (tab not ready), skipping:", e.message);
+	}
 	modifierCost += styleTokens;
 
 	if (pendingRequest?.toolDefinitions) {
