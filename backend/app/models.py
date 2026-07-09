@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Float, Boolean, Text, ForeignKey, UniqueConstraint, DateTime
+from sqlalchemy import String, Float, Boolean, Text, ForeignKey, UniqueConstraint, DateTime, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
@@ -40,6 +40,13 @@ class Account(Base):
     is_active:         Mapped[bool]            = mapped_column(Boolean, default=True)
     created_at:        Mapped[datetime]        = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at:      Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Notification preferences
+    notify_telegram:   Mapped[bool]            = mapped_column(Boolean, default=False)
+    telegram_chat_id:  Mapped[str | None]      = mapped_column(String(64))
+    notify_whatsapp:   Mapped[bool]            = mapped_column(Boolean, default=False)
+    whatsapp_number:   Mapped[str | None]      = mapped_column(String(32))
+    notify_reset:      Mapped[bool]            = mapped_column(Boolean, default=True)  # notify when limits reset
+    notify_threshold:  Mapped[float | None]    = mapped_column(Float)  # e.g., 0.9 for 90%
 
     provider:          Mapped["Provider"]           = relationship(back_populates="accounts")
     snapshots:         Mapped[list["UsageSnapshot"]] = relationship(back_populates="account", cascade="all, delete-orphan")

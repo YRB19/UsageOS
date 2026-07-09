@@ -15,6 +15,13 @@ export interface DashboardAccount {
   last_seen_at: string | null;
   current_usage: Record<string, CurrentUsage | null>;
   note: string;
+  // Notification preferences
+  notify_telegram: boolean;
+  telegram_chat_id: string | null;
+  notify_whatsapp: boolean;
+  whatsapp_number: string | null;
+  notify_reset: boolean;
+  notify_threshold: number | null;
 }
 
 export interface SnapshotPoint {

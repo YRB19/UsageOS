@@ -46,13 +46,26 @@ class AccountOut(BaseModel):
     last_seen_at:      Optional[datetime]
     current_usage:     list[CurrentUsageOut] = []
     note:              Optional[str] = None
+    # Notification preferences
+    notify_telegram:   bool = False
+    telegram_chat_id:  Optional[str] = None
+    notify_whatsapp:   bool = False
+    whatsapp_number:   Optional[str] = None
+    notify_reset:      bool = True
+    notify_threshold:  Optional[float] = None
     model_config = ConfigDict(from_attributes=True)
 
 class AccountPatch(BaseModel):
-    nickname:     Optional[str] = None
-    project_name: Optional[str] = None
-    color:        Optional[str] = None
-    is_active:    Optional[bool] = None
+    nickname:          Optional[str] = None
+    project_name:      Optional[str] = None
+    color:             Optional[str] = None
+    is_active:         Optional[bool] = None
+    notify_telegram:   Optional[bool] = None
+    telegram_chat_id:  Optional[str] = None
+    notify_whatsapp:   Optional[bool] = None
+    whatsapp_number:   Optional[str] = None
+    notify_reset:      Optional[bool] = None
+    notify_threshold:  Optional[float] = None
 
 
 # ── Notes ─────────────────────────────────────────────────────────────────────

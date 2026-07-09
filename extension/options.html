@@ -175,10 +175,65 @@
 	<!-- ── Notifications ── -->
 	<div class="section">
 		<div class="section-title">Notifications</div>
-		<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+
+		<!-- Reset notifications -->
+		<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:16px;">
 			<input type="checkbox" id="reset-notif">
 			<span style="font-size:13px;color:var(--text-primary,#d4d4d4)">Notify me when usage limits reset</span>
 		</label>
+
+		<div class="divider"></div>
+
+		<!-- Telegram -->
+		<details style="margin-top:8px;">
+			<summary style="cursor:pointer;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+				<span style="width:20px;height:20px;background:#0088cc;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;">TG</span>
+				Telegram
+			</summary>
+			<div style="margin-top:12px;padding-left:28px;display:flex;flex-direction:column;gap:10px;">
+				<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+					<input type="checkbox" id="telegram-enabled">
+					<span style="font-size:13px;">Enable Telegram notifications</span>
+				</label>
+				<div style="display:flex;gap:8px;align-items:flex-start;">
+					<input type="text" id="telegram-chat-id" placeholder="Chat ID (e.g., 123456789)" style="flex:1;" disabled>
+					<button class="btn btn-primary" id="test-telegram" disabled style="padding:6px 12px;font-size:12px;">Test</button>
+				</div>
+				<div class="hint">1. Message <code>@userinfobot</code> on Telegram to get your Chat ID<br>2. Ensure your bot is started and has permission to message you</div>
+			</div>
+		</details>
+
+		<div class="divider"></div>
+
+		<!-- WhatsApp -->
+		<details style="margin-top:8px;">
+			<summary style="cursor:pointer;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+				<span style="width:20px;height:20px;background:#25D366;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;">WA</span>
+				WhatsApp (Twilio)
+			</summary>
+			<div style="margin-top:12px;padding-left:28px;display:flex;flex-direction:column;gap:10px;">
+				<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+					<input type="checkbox" id="whatsapp-enabled">
+					<span style="font-size:13px;">Enable WhatsApp notifications</span>
+				</label>
+				<div style="display:flex;gap:8px;align-items:flex-start;">
+					<input type="tel" id="whatsapp-number" placeholder="+15551234567" style="flex:1;" disabled>
+					<button class="btn btn-primary" id="test-whatsapp" disabled style="padding:6px 12px;font-size:12px;">Test</button>
+				</div>
+				<div class="hint">Include country code (e.g., +1 for US). Requires Twilio account with WhatsApp sandbox.</div>
+			</div>
+		</details>
+
+		<div class="divider"></div>
+
+		<!-- Threshold -->
+		<div style="margin-top:8px;">
+			<label for="notify-threshold" style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:5px;">
+				Threshold alert: <span id="threshold-value">90%</span>
+			</label>
+			<input type="range" id="notify-threshold" min="50" max="100" step="5" value="90" style="width:100%;accent-color:#d97757;">
+			<div class="hint">Notify when any usage limit exceeds this percentage</div>
+		</div>
 	</div>
 
 	<script src="lib/browser-polyfill.min.js"></script>
