@@ -1,13 +1,8 @@
 import { atlasSync as AtlasSync } from './bg-components/atlasSync.js';
 
 // NOTE: atlasSync.js exports a singleton instance (`atlasSync`), not the
-// `AtlasSync` class. The locals below used to dereference a non-existent
-// named export, which silently bound to `undefined` and threw inside the
-// async click handlers — swallowing the error, never writing to storage,
-// and never firing a fetch (hence zero Network-tab activity on Save).
-// We alias the singleton import to `AtlasSync` so the rest of this file
-// can keep calling AtlasSync.getSettings/saveSettings/testConnection —
-// all of which are instance methods on the singleton.
+// `AtlasSync` class. We alias the singleton import to `AtlasSync` so the
+// rest of this file can keep calling AtlasSync.getSettings/saveSettings/testConnection.
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -118,8 +113,9 @@ document.getElementById('clear-anthropic').addEventListener('click', async () =>
 	showStatus('anthropic-status', 'API key cleared.', 'ok');
 });
 
-// ─── Notifications toggle ──────────────────────────────────────────────────
+// ─── Notification settings ──────────────────────────────────────────────────
 
+// Reset notifications
 async function loadNotifSetting() {
 	try {
 		const enabled = await send('getResetNotifEnabled');
@@ -130,11 +126,146 @@ async function loadNotifSetting() {
 	}
 }
 
-document.getElementById('reset-notif').addEventListener('change', async (e) => {
+document.getElementById('reset-notif')?.addEventListener('change', async (e) => {
 	await send('setResetNotifEnabled', { value: e.target.checked });
 });
 
-// ─── Boot ──────────────────────────────────────────────────────────────────
+// Telegram
+async function loadTelegramSettings() {
+	try {
+		const result = await send('getNotificationSettings');
+		if (result?.telegram_enabled !== undefined) {
+			const cb = document.getElementById('telegram-enabled');
+			const fields = document.getElementById('telegram-fields');
+			const chatId = document.getElementById('telegram-chat-id');
+			const testBtn = document.getElementById('test-telegram');
+			
+			if (cb) cb.checked = result.telegram_enabled;
+			if (fields) fields.style.display = result.telegram_enabled ? 'block' : 'none';
+			if (chatId && result.telegram_chat_id) chatId.value = result.telegram_chat_id;
+			if (chatId) chatId.disabled = !result.telegram_enabled;
+			if (testBtn) testBtn.disabled = !result.telegram_enabled || !result.telegram_chat_id;
+		}
+	} catch (err) {
+		console.error('[Options] Failed to load Telegram settings:', err);
+	}
+}
+
+document.getElementById('telegram-enabled')?.addEventListener('change', async (e) => {
+	const enabled = e.target.checked;
+	const fields = document.getElementById('telegram-fields');
+	const chatId = document.getElementById('telegram-chat-id');
+	const testBtn = document.getElementById('test-telegram');
+	
+	if (fields) fields.style.display = enabled ? 'block' : 'none';
+	if (chatId) chatId.disabled = !enabled;
+	if (testBtn) testBtn.disabled = !enabled || !chatId?.value;
+	
+	await send('setNotificationSettings', { telegram_enabled: enabled });
+});
+
+document.getElementById('telegram-chat-id')?.addEventListener('input', async (e) => {
+	const testBtn = document.getElementById('test-telegram');
+	if (testBtn) testBtn.disabled = !e.target.value;
+	await send('setNotificationSettings', { telegram_chat_id: e.target.value });
+});
+
+document.getElementById('test-telegram')?.addEventListener('click', async () => {
+	const btn = document.getElementById('test-telegram');
+	btn.disabled = true;
+	btn.textContent = 'Sending...';
+	
+	try {
+		await send('testNotification', { channel: 'telegram' });
+		showStatus('atlas-status', '✓ Telegram test sent', 'ok');
+	} catch (err) {
+		showStatus('atlas-status', `✗ Telegram test failed: ${err.message}`, 'err');
+	} finally {
+		btn.disabled = false;
+		btn.textContent = 'Test Telegram';
+	}
+});
+
+// WhatsApp
+async function loadWhatsAppSettings() {
+	try {
+		const result = await send('getNotificationSettings');
+		if (result?.whatsapp_enabled !== undefined) {
+			const cb = document.getElementById('whatsapp-enabled');
+			const fields = document.getElementById('whatsapp-fields');
+			const number = document.getElementById('whatsapp-number');
+			const testBtn = document.getElementById('test-whatsapp');
+			
+			if (cb) cb.checked = result.whatsapp_enabled;
+			if (fields) fields.style.display = result.whatsapp_enabled ? 'block' : 'none';
+			if (number && result.whatsapp_number) number.value = result.whatsapp_number;
+			if (number) number.disabled = !result.whatsapp_enabled;
+			if (testBtn) testBtn.disabled = !result.whatsapp_enabled || !number?.value;
+		}
+	} catch (err) {
+		console.error('[Options] Failed to load WhatsApp settings:', err);
+	}
+}
+
+document.getElementById('whatsapp-enabled')?.addEventListener('change', async (e) => {
+	const enabled = e.target.checked;
+	const fields = document.getElementById('whatsapp-fields');
+	const number = document.getElementById('whatsapp-number');
+	const testBtn = document.getElementById('test-whatsapp');
+	
+	if (fields) fields.style.display = enabled ? 'block' : 'none';
+	if (number) number.disabled = !enabled;
+	if (testBtn) testBtn.disabled = !enabled || !number?.value;
+	
+	await send('setNotificationSettings', { whatsapp_enabled: enabled });
+});
+
+document.getElementById('whatsapp-number')?.addEventListener('input', async (e) => {
+	const testBtn = document.getElementById('test-whatsapp');
+	if (testBtn) testBtn.disabled = !e.target.value;
+	await send('setNotificationSettings', { whatsapp_number: e.target.value });
+});
+
+document.getElementById('test-whatsapp')?.addEventListener('click', async () => {
+	const btn = document.getElementById('test-whatsapp');
+	btn.disabled = true;
+	btn.textContent = 'Sending...';
+	
+	try {
+		await send('testNotification', { channel: 'whatsapp' });
+		showStatus('atlas-status', '✓ WhatsApp test sent', 'ok');
+	} catch (err) {
+		showStatus('atlas-status', `✗ WhatsApp test failed: ${err.message}`, 'err');
+	} finally {
+		btn.disabled = false;
+		btn.textContent = 'Test WhatsApp';
+	}
+});
+
+// Threshold
+async function loadThresholdSetting() {
+	try {
+		const result = await send('getNotificationSettings');
+		const thresholdEl = document.getElementById('notify-threshold');
+		const thresholdVal = document.getElementById('threshold-value');
+		
+		if (thresholdEl && result?.notify_threshold !== undefined) {
+			thresholdEl.value = Math.round((result.notify_threshold || 0.9) * 100);
+			if (thresholdVal) thresholdVal.textContent = `${thresholdEl.value}%`;
+		}
+	} catch (err) {
+		console.error('[Options] Failed to load threshold setting:', err);
+	}
+}
+
+document.getElementById('notify-threshold')?.addEventListener('input', async (e) => {
+	const val = parseInt(e.target.value, 10);
+	const thresholdVal = document.getElementById('threshold-value');
+	if (thresholdVal) thresholdVal.textContent = `${val}%`;
+	await send('setNotificationSettings', { notify_threshold: val / 100 });
+});
+
+// ─── Boot ────────────────────────────────────────────────────────────────
 
 // Don't use top-level await — wrap in an async IIFE so one failure doesn't kill the page.
 (async () => {
@@ -142,5 +273,8 @@ document.getElementById('reset-notif').addEventListener('change', async (e) => {
 	await loadAtlasSettings();
 	await loadAnthropicKey();
 	await loadNotifSetting();
+	await loadTelegramSettings();
+	await loadWhatsAppSettings();
+	await loadThresholdSetting();
 	console.log('[Options] Boot complete. Click handlers registered.');
 })();

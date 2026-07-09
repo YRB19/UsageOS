@@ -4,6 +4,7 @@ import { AccountCard } from "../components/AccountCard";
 import { api } from "../lib/api";
 
 const POLL_MS = 60_000;
+const RESET_CHECK_MS = 10_000; // check for resets every 10s (was 30s)
 
 export function Dashboard() {
   const [accounts, setAccounts] = useState<DashboardAccount[]>([]);
@@ -11,6 +12,7 @@ export function Dashboard() {
   const [error,    setError]    = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const timerRef                = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resetCheckRef           = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetch = useCallback(async () => {
     try {
@@ -25,11 +27,32 @@ export function Dashboard() {
     }
   }, []);
 
+  // Check if any limit has reset since last fetch - if so, trigger immediate refetch
+  const checkForResets = useCallback(() => {
+    const now = Date.now();
+    const hasPendingReset = accounts.some((acc) => {
+      return Object.values(acc.current_usage).some((usage) => {
+        if (!usage?.resets_at) return false;
+        const resetTime = new Date(usage.resets_at).getTime();
+        // If reset happened within last check window + 30s buffer
+        return resetTime <= now && resetTime > now - RESET_CHECK_MS - 30_000;
+      });
+    });
+    if (hasPendingReset) {
+      fetch();
+    }
+  }, [accounts, fetch]);
+
   useEffect(() => {
     fetch();
     timerRef.current = setInterval(fetch, POLL_MS);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [fetch]);
+    // Separate interval to catch resets between polls
+    resetCheckRef.current = setInterval(checkForResets, RESET_CHECK_MS);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (resetCheckRef.current) clearInterval(resetCheckRef.current);
+    };
+  }, [fetch, checkForResets]);
 
   const handleUpdate = (id: string, patch: Partial<DashboardAccount>) => {
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));

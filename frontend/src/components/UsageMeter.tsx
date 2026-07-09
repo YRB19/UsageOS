@@ -3,7 +3,7 @@ import { CountdownTimer } from "./CountdownTimer";
 import { LIMIT_LABELS } from "../lib/types";
 import type { CurrentUsage } from "../lib/types";
 
-export function UsageMeter({ limitType, data }: { limitType: string; data: CurrentUsage }) {
+export function UsageMeter({ limitType, data, onReset }: { limitType: string; data: CurrentUsage; onReset?: () => void }) {
   const pct   = data.usage_pct ?? 0;
   const color = pctColor(pct);
   const label = LIMIT_LABELS[limitType] ?? limitType;
@@ -21,7 +21,7 @@ export function UsageMeter({ limitType, data }: { limitType: string; data: Curre
         />
       </div>
       <div className="mt-1">
-        <CountdownTimer resetsAt={data.resets_at} />
+        <CountdownTimer resetsAt={data.resets_at} onReset={onReset} />
       </div>
     </div>
   );
