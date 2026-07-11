@@ -1,17 +1,15 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
+import os
+from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    ATLAS_API_KEY: str
-    APP_ENV: str = "production"
-    # Notification settings
-    TELEGRAM_BOT_TOKEN: str = ""
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_WHATSAPP_FROM: str = ""
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://atlas:CHANGE_ME_PASSWORD@postgres:5432/atlas")
+    atlas_api_key: str = os.getenv("ATLAS_API_KEY", "")
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    cors_origins: list[str] = ["*"]
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
-
+    class Config:
+        env_file = "../.env"
+        case_sensitive = False
 
 settings = Settings()

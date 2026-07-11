@@ -1,16 +1,15 @@
-from fastapi import Security, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from .config import settings
+from fastapi import HTTPException, Security, Depends
+from fastapi.security import APIKeyHeader
+from app.config import settings
 
-bearer_scheme = HTTPBearer(auto_error=False)
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
-async def require_api_key(
-    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
-) -> str:
-    if not credentials or credentials.credentials != settings.ATLAS_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return credentials.credentials
+async def verify_api_key(authorization: str = Security(api_key_header)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid Authorization format")
+    token = authorization.split(" ")[1]
+    if token != settings.atlas_api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return token
