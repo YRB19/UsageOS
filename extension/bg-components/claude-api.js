@@ -1,4 +1,4 @@
-import { CONFIG, RawLog, FORCE_DEBUG, StoredMap, getStorageValue, setStorageValue, getOrgStorageKey, sendTabMessage, containerFetch } from './utils.js';
+import { CONFIG, RawLog, FORCE_DEBUG, StoredMap, getStorageValue, setStorageValue, getOrgStorageKey } from './utils.js';
 import { tokenCounter, getTextFromContent } from './tokenManagement.js';
 import { UsageData, ConversationData } from '../shared/dataclasses.js';
 
@@ -29,25 +29,27 @@ const accountEmailCache = new StoredMap("accountEmails");
 
 // Pure HTTP/API layer
 class ClaudeAPI {
-	constructor(cookieStoreId, orgId) {
+	// `fetchImpl(url, options) => Response` is supplied by the active ContainerStrategy, already bound
+	// to this account's container. ClaudeAPI itself is container-agnostic.
+	constructor(orgId, fetchImpl) {
 		this.baseUrl = 'https://claude.ai/api';
-		this.cookieStoreId = cookieStoreId;
 		this.orgId = orgId;
+		this.fetchImpl = fetchImpl;
 	}
 
 	// Core methods
 	async getRequest(endpoint) {
-		const response = await containerFetch(`${this.baseUrl}${endpoint}`, {
+		const response = await this.fetchImpl(`${this.baseUrl}${endpoint}`, {
 			headers: {
 				'Content-Type': 'application/json'
 			},
 			method: 'GET'
-		}, this.cookieStoreId);
+		});
 		return response.json();
 	}
 
 	async fetchUrl(url, options = {}) {
-		return containerFetch(url, options, this.cookieStoreId);
+		return this.fetchImpl(url, options);
 	}
 
 	// Factory method - returns a ConversationAPI instance
@@ -71,7 +73,7 @@ class ClaudeAPI {
 		const usageLimitsResponse = await this.getUsageLimits();
 		const subscriptionTier = await this.getSubscriptionTier();
 		let creditsResponse = null;
-		if (usageLimitsResponse.extra_usage?.is_enabled) {
+		if (usageLimitsResponse.spend?.enabled || usageLimitsResponse.extra_usage?.is_enabled) {
 			creditsResponse = await this.getCredits();
 		}
 		const usageData = UsageData.fromAPIResponse(usageLimitsResponse, subscriptionTier, creditsResponse);
@@ -112,30 +114,6 @@ class ClaudeAPI {
 		};
 	}
 
-	async getStyleTokens(styleId, tabId) {
-		if (!styleId) {
-			await Log("Fetching styleId from tab:", tabId);
-			const response = await sendTabMessage(tabId, {
-				action: "getStyleId"
-			});
-			styleId = response?.styleId;
-			if (!styleId) return 0;
-		}
-
-		const styleData = await this.getRequest(`/organizations/${this.orgId}/list_styles`);
-		let style = styleData?.defaultStyles?.find(style => style.key === styleId);
-		if (!style) {
-			style = styleData?.customStyles?.find(style => style.uuid === styleId);
-		}
-
-		await Log("Got style:", style);
-		if (style) {
-			return await tokenCounter.countText(style.prompt);
-		} else {
-			return 0;
-		}
-	}
-
 	// Account UI language, e.g. "fr-FR" (null if unavailable)
 	async getAccountLocale() {
 		const profileData = await this.getRequest('/account_profile');
@@ -144,33 +122,62 @@ class ClaudeAPI {
 
 	// Account email address, used to label/identify accounts in the multi-account dashboard.
 	// Cached per cookie store since it's identical across orgs within the same login session.
+	// IMPORTANT: only successful (non-null) results are cached — a failed/empty lookup must
+	// retry on the next call rather than locking in "unknown" for the cache TTL.
 	async getAccountEmail() {
-		const cacheKey = this.cookieStoreId || 'default';
+		const cacheKey = this.orgId || 'default';
 		const cached = await accountEmailCache.get(cacheKey);
-		if (cached !== undefined && cached !== null) return cached;  // don't cache null
+		if (cached) return cached;
 
+		// First check: DOM-extracted email cached by background from content script.
+		// This runs before any API calls and is the most reliable source for personal accounts.
+		try {
+			const { getStorageValue } = await import('./utils.js');
+			const domEmail = await getStorageValue(`domEmail_${this.orgId}`);
+			if (domEmail) {
+				await accountEmailCache.set(cacheKey, domEmail, 24 * 60 * 60 * 1000);
+				await Log(`getAccountEmail: using DOM-extracted email -> ${domEmail}`);
+				return domEmail;
+			}
+		} catch (error) {
+			await Log("warn", "getAccountEmail: domEmail lookup failed:", error);
+		}
+
+		// Primary attempt: /account_profile (confirmed via debug log this endpoint does NOT
+		// return an email field — kept here in case Anthropic adds one later).
 		try {
 			const profileData = await this.getRequest('/account_profile');
-			// Broaden field lookup — add more after seeing diagnostic log
-			const email = profileData?.email_address 
-				|| profileData?.email 
-				|| profileData?.user?.email 
-				|| profileData?.account?.email 
-				|| profileData?.emailAddress 
-				|| null;
-			
-			if (!email) {
-				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", profileData);
-			}
-			
+			const email =
+				profileData?.email_address ||
+				profileData?.email ||
+				profileData?.account?.email_address ||
+				profileData?.account?.email ||
+				null;
 			if (email) {
 				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+				return email;
 			}
-			return email;
 		} catch (error) {
-			await Log("warn", "Failed to fetch account email:", error);
-			return null;  // not cached
+			await Log("warn", "getAccountEmail: account_profile fetch failed:", error);
 		}
+
+		// Fallback: Claude auto-names personal-account orgs as "{email}'s Organization" —
+		// extract the email from that pattern via getOrgInfo(), which we already call elsewhere.
+		try {
+			const org = await this.getOrgInfo();
+			const match = org?.name?.match(/^(.+@.+)'s Organization$/i);
+			if (match) {
+				const email = match[1];
+				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+				await Log(`getAccountEmail: recovered email from org name -> ${email}`);
+				return email;
+			}
+			await Log("warn", "getAccountEmail: org name did not match expected pattern:", org?.name);
+		} catch (error) {
+			await Log("warn", "getAccountEmail: getOrgInfo fallback failed:", error);
+		}
+
+		return null;
 	}
 
 	async getProfileTokens() {
