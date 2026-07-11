@@ -1,242 +1,252 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Claude Tracker · ATLAS Settings</title>
 	<link rel="stylesheet" href="tracker-styles.css">
 	<style>
+		:root {
+			--bg-primary: #1e1e1e;
+			--bg-secondary: #252526;
+			--text-primary: #d4d4d4;
+			--text-secondary: #9cdcfe;
+			--button-bg: #2d2d2d;
+			--button-hover: #3e3e3e;
+			--button-active: #505050;
+			--border-color: #454545;
+			--input-bg: #1e1e1e;
+			--input-border: #454545;
+			--input-focus: #2c84db;
+		}
+
 		body {
-			max-width: 560px;
-			margin: 40px auto;
-			padding: 0 24px 80px;
+			margin: 0;
+			padding: 24px;
+			background-color: var(--bg-primary);
+			color: var(--text-primary);
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			font-size: 14px;
+			line-height: 1.6;
+			min-width: 480px;
 		}
 
-		.page-title {
-			font-size: 18px;
+		h1 {
+			margin: 0 0 8px 0;
+			font-size: 22px;
 			font-weight: 600;
-			margin-bottom: 4px;
+			color: var(--text-primary);
 		}
 
-		.page-sub {
+		.subtitle {
+			margin: 0 0 24px 0;
+			color: var(--text-secondary);
 			font-size: 13px;
-			color: var(--text-muted, #8a8a8a);
-			margin-bottom: 32px;
 		}
 
 		.section {
-			background: var(--background-secondary, #252526);
-			border: 1px solid var(--border-color, #3e3e3e);
-			border-radius: 10px;
-			padding: 20px 22px;
-			margin-bottom: 18px;
+			margin-bottom: 24px;
+			padding-bottom: 24px;
+			border-bottom: 1px solid var(--border-color);
+		}
+
+		.section:last-child {
+			border-bottom: none;
+			margin-bottom: 0;
+			padding-bottom: 0;
 		}
 
 		.section-title {
-			font-size: 13px;
+			margin: 0 0 16px 0;
+			font-size: 14px;
 			font-weight: 600;
-			margin-bottom: 14px;
-			display: flex;
-			align-items: center;
-			gap: 7px;
+			color: var(--text-primary);
 		}
 
-		.badge-atlas {
-			font-size: 10px;
-			background: #d97757;
-			color: #1a1a1a;
-			padding: 2px 7px;
-			border-radius: 99px;
-			font-weight: 700;
+		.field {
+			margin-bottom: 16px;
+		}
+
+		.field:last-child {
+			margin-bottom: 0;
 		}
 
 		label {
 			display: block;
-			font-size: 12px;
-			color: var(--text-muted, #8a8a8a);
-			margin-bottom: 5px;
+			margin-bottom: 6px;
+			font-size: 13px;
+			color: var(--text-secondary);
 		}
 
 		input[type="text"],
-		input[type="url"],
 		input[type="password"] {
 			width: 100%;
 			box-sizing: border-box;
-			background: var(--background-primary, #1e1e1e);
-			border: 1px solid var(--border-color, #3e3e3e);
+			padding: 10px 12px;
+			background: var(--input-bg);
+			border: 1px solid var(--input-border);
 			border-radius: 6px;
-			color: var(--text-primary, #d4d4d4);
+			color: var(--text-primary);
 			font-size: 13px;
-			padding: 8px 10px;
 			font-family: inherit;
-			margin-bottom: 12px;
+			transition: border-color 0.2s, box-shadow 0.2s;
 		}
 
-		input:focus {
+		input[type="text"]:focus,
+		input[type="password"]:focus {
 			outline: none;
-			border-color: #d97757;
+			border-color: var(--input-focus);
+			box-shadow: 0 0 0 3px rgba(44, 132, 219, 0.2);
 		}
 
-		.row {
+		input::placeholder {
+			color: #666;
+		}
+
+		.button-row {
 			display: flex;
-			gap: 8px;
-			align-items: center;
+			gap: 12px;
+			margin-top: 24px;
+			padding-top: 16px;
+			border-top: 1px solid var(--border-color);
 		}
 
-		.btn {
-			padding: 8px 16px;
+		button {
+			padding: 10px 20px;
+			background: var(--button-bg);
+			color: var(--text-primary);
+			border: 1px solid var(--border-color);
 			border-radius: 6px;
+			cursor: pointer;
 			font-size: 13px;
 			font-weight: 500;
-			cursor: pointer;
-			border: 1px solid var(--border-color, #3e3e3e);
-			background: var(--background-secondary, #252526);
-			color: var(--text-primary, #d4d4d4);
-			white-space: nowrap;
+			font-family: inherit;
+			transition: background-color 0.2s, transform 0.1s;
 		}
 
-		.btn:hover { filter: brightness(1.15); }
-		.btn:active { filter: brightness(0.9); }
+		button:hover {
+			background: var(--button-hover);
+		}
 
-		.btn-primary {
-			background: #d97757;
-			border-color: #d97757;
-			color: #1a1a1a;
-			font-weight: 700;
+		button:active {
+			background: var(--button-active);
+			transform: translateY(1px);
+		}
+
+		button.primary {
+			background: #2c84db;
+			border-color: #2c84db;
+			color: white;
+		}
+
+		button.primary:hover {
+			background: #3a93e8;
+		}
+
+		button.primary:active {
+			background: #2474c4;
 		}
 
 		.status {
-			font-size: 12px;
-			padding: 6px 10px;
+			padding: 10px 12px;
 			border-radius: 6px;
-			margin-top: 10px;
+			font-size: 13px;
+			margin-top: 12px;
 			display: none;
 		}
 
-		.status.show { display: block; }
-		.status.ok   { background: rgba(74,222,128,.12); color: #4ade80; }
-		.status.err  { background: rgba(226,85,79,.12);  color: #e2554f; }
-		.status.info { background: rgba(217,119,87,.12); color: #d97757; }
+		.status.visible {
+			display: block;
+		}
 
-		.hint {
-			font-size: 11px;
-			color: var(--text-muted, #8a8a8a);
-			margin-top: -8px;
-			margin-bottom: 12px;
+		.status.info {
+			background: rgba(44, 132, 219, 0.15);
+			border: 1px solid rgba(44, 132, 219, 0.3);
+			color: #5db0f5;
+		}
+
+		.status.success {
+			background: rgba(34, 197, 94, 0.15);
+			border: 1px solid rgba(34, 197, 94, 0.3);
+			color: #4ade80;
+		}
+
+		.status.error {
+			background: rgba(222, 41, 41, 0.15);
+			border: 1px solid rgba(222, 41, 41, 0.3);
+			color: #f87171;
+		}
+
+		.help-text {
+			margin-top: 8px;
+			font-size: 12px;
+			color: #888;
 			line-height: 1.5;
 		}
 
-		.divider {
+		.help-text a {
+			color: #2c84db;
+			text-decoration: none;
+		}
+
+		.help-text a:hover {
+			text-decoration: underline;
+		}
+
+		.password-wrapper {
+			position: relative;
+		}
+
+		.password-toggle {
+			position: absolute;
+			right: 10px;
+			top: 50%;
+			transform: translateY(-50%);
+			background: none;
 			border: none;
-			border-top: 1px solid var(--border-color, #3e3e3e);
-			margin: 16px 0;
+			color: var(--text-secondary);
+			cursor: pointer;
+			padding: 4px;
+			font-size: 14px;
+			line-height: 1;
+		}
+
+		.password-toggle:hover {
+			color: var(--text-primary);
 		}
 	</style>
 </head>
 <body>
-	<div class="page-title">Claude Usage Tracker</div>
-	<div class="page-sub">Settings &amp; ATLAS Integration</div>
+	<h1>UsageOS Settings</h1>
+	<p class="subtitle">Configure your UsageOS backend connection to sync usage data across devices.</p>
 
-	<!-- ── ATLAS Sync ──────────────────────────── -->
 	<div class="section">
-		<div class="section-title">
-			ATLAS Sync <span class="badge-atlas">ATLAS</span>
+		<h2 class="section-title">Server Connection</h2>
+
+		<div class="field">
+			<label for="server-url">Server URL</label>
+			<input type="text" id="server-url" placeholder="https://usageos.rishit.online" autocomplete="url">
+			<p class="help-text">Your UsageOS backend URL. Must use HTTPS.</p>
 		</div>
 
-		<label for="atlas-url">Server URL</label>
-		<input type="url" id="atlas-url" placeholder="https://atlas-api.yourdomain.com" autocomplete="off">
-		<div class="hint">The base URL of your ATLAS FastAPI backend. Include protocol, no trailing slash.</div>
-
-		<label for="atlas-key">API Key</label>
-		<input type="password" id="atlas-key" placeholder="your-atlas-api-key" autocomplete="off">
-		<div class="hint">Set this in your ATLAS <code>.env</code> as <code>ATLAS_API_KEY</code>.</div>
-
-		<div class="row">
-			<button class="btn btn-primary" id="save-atlas">Save</button>
-			<button class="btn" id="test-atlas">Test connection</button>
+		<div class="field">
+			<label for="api-key">API Key</label>
+			<div class="password-wrapper">
+				<input type="password" id="api-key" placeholder="sk_usageos_..." autocomplete="off">
+				<button type="button" class="password-toggle" id="toggle-key" aria-label="Show/hide API key">👁</button>
+			</div>
+			<p class="help-text">Get your API key from the UsageOS dashboard.</p>
 		</div>
 
-		<div class="status" id="atlas-status"></div>
+		<div class="status" id="status"></div>
 	</div>
 
-	<!-- ── Anthropic API key (existing feature) ── -->
 	<div class="section">
-		<div class="section-title">Anthropic API Key (optional)</div>
-		<label for="anthropic-key">Key</label>
-		<input type="password" id="anthropic-key" placeholder="sk-ant-..." autocomplete="off">
-		<div class="hint">Used for accurate token counting instead of the local GPT tokenizer.</div>
-		<div class="row">
-			<button class="btn btn-primary" id="save-anthropic">Save</button>
-			<button class="btn" id="clear-anthropic">Clear</button>
-		</div>
-		<div class="status" id="anthropic-status"></div>
-	</div>
-
-	<!-- ── Notifications ── -->
-	<div class="section">
-		<div class="section-title">Notifications</div>
-
-		<!-- Reset notifications -->
-		<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:16px;">
-			<input type="checkbox" id="reset-notif">
-			<span style="font-size:13px;color:var(--text-primary,#d4d4d4)">Notify me when usage limits reset</span>
-		</label>
-
-		<div class="divider"></div>
-
-		<!-- Telegram -->
-		<details style="margin-top:8px;">
-			<summary style="cursor:pointer;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
-				<span style="width:20px;height:20px;background:#0088cc;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;">TG</span>
-				Telegram
-			</summary>
-			<div style="margin-top:12px;padding-left:28px;display:flex;flex-direction:column;gap:10px;">
-				<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-					<input type="checkbox" id="telegram-enabled">
-					<span style="font-size:13px;">Enable Telegram notifications</span>
-				</label>
-				<div style="display:flex;gap:8px;align-items:flex-start;">
-					<input type="text" id="telegram-chat-id" placeholder="Chat ID (e.g., 123456789)" style="flex:1;" disabled>
-					<button class="btn btn-primary" id="test-telegram" disabled style="padding:6px 12px;font-size:12px;">Test</button>
-				</div>
-				<div class="hint">1. Message <code>@userinfobot</code> on Telegram to get your Chat ID<br>2. Ensure your bot is started and has permission to message you</div>
-			</div>
-		</details>
-
-		<div class="divider"></div>
-
-		<!-- WhatsApp -->
-		<details style="margin-top:8px;">
-			<summary style="cursor:pointer;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
-				<span style="width:20px;height:20px;background:#25D366;border-radius:4px;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;">WA</span>
-				WhatsApp (Twilio)
-			</summary>
-			<div style="margin-top:12px;padding-left:28px;display:flex;flex-direction:column;gap:10px;">
-				<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-					<input type="checkbox" id="whatsapp-enabled">
-					<span style="font-size:13px;">Enable WhatsApp notifications</span>
-				</label>
-				<div style="display:flex;gap:8px;align-items:flex-start;">
-					<input type="tel" id="whatsapp-number" placeholder="+15551234567" style="flex:1;" disabled>
-					<button class="btn btn-primary" id="test-whatsapp" disabled style="padding:6px 12px;font-size:12px;">Test</button>
-				</div>
-				<div class="hint">Include country code (e.g., +1 for US). Requires Twilio account with WhatsApp sandbox.</div>
-			</div>
-		</details>
-
-		<div class="divider"></div>
-
-		<!-- Threshold -->
-		<div style="margin-top:8px;">
-			<label for="notify-threshold" style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:5px;">
-				Threshold alert: <span id="threshold-value">90%</span>
-			</label>
-			<input type="range" id="notify-threshold" min="50" max="100" step="5" value="90" style="width:100%;accent-color:#d97757;">
-			<div class="hint">Notify when any usage limit exceeds this percentage</div>
+		<div class="button-row">
+			<button type="button" class="primary" id="save-btn">Save Settings</button>
+			<button type="button" id="test-btn">Test Connection</button>
 		</div>
 	</div>
 
 	<script src="lib/browser-polyfill.min.js"></script>
-	<script src="options.js" type="module"></script>
+	<script src="options.js"></script>
 </body>
 </html>
