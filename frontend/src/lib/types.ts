@@ -1,40 +1,57 @@
-export interface CurrentUsage {
+export interface Account {
+  id: string;
+  provider: string;
+  email: string | null;
+  org_id: string;
+  nickname: string | null;
+  color: string;
+  telegram_chat_id: string | null;
+  subscription_tier: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface UsageLimit {
   limit_type: string;
-  usage_pct: number | null;
+  usage_pct: number;
   resets_at: string | null;
   updated_at: string;
 }
 
-export interface DashboardAccount {
-  id: string;
-  email: string;
-  nickname: string | null;
-  project_name: string | null;
-  color: string;
-  subscription_tier: string | null;
-  last_seen_at: string | null;
-  current_usage: Record<string, CurrentUsage | null>;
-  note: string;
-  // Notification preferences
-  notify_telegram: boolean;
-  telegram_chat_id: string | null;
-  notify_whatsapp: boolean;
-  whatsapp_number: string | null;
-  notify_reset: boolean;
-  notify_threshold: number | null;
+export interface AccountWithUsage extends Account {
+  limits: UsageLimit[];
 }
 
-export interface SnapshotPoint {
-  recorded_at: string;
-  usage_pct: number;
-  resets_at: string | null;
+export interface SyncEvent {
+  id: string;
+  org_id: string;
+  email: string | null;
+  subscription_tier: string | null;
+  limits: Record<string, { usage_pct: number | null; resets_at: string | null } | null>;
+  timestamp: string;
+}
+
+export interface NoteResponse {
+  content: string;
+  updated_at: string | null;
 }
 
 export const LIMIT_LABELS: Record<string, string> = {
-  session:       "Session",
-  weekly:        "Weekly",
-  sonnet_weekly: "Sonnet",
-  opus_weekly:   "Opus",
+  session: 'Session',
+  weekly: 'Weekly',
+  sonnet_weekly: 'Sonnet Weekly',
+  opus_weekly: 'Opus Weekly',
 };
 
-export const LIMIT_ORDER = ["session", "weekly", "sonnet_weekly", "opus_weekly"];
+export const LIMIT_ORDER: string[] = ['session', 'weekly', 'sonnet_weekly', 'opus_weekly'];
+
+export const PRESET_COLORS = [
+  '#6366f1',
+  '#8b5cf6',
+  '#ec4899',
+  '#ef4444',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#06b6d4',
+];
