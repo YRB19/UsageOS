@@ -1,253 +1,372 @@
-/* global UsageData, isPeakHours, localize, setLocaleOverride */
+/* global browser */
 'use strict';
 
-const LIMIT_LABEL_KEYS = {
-	session: 'usage.label_session',
-	weekly: 'usage.label_weekly',
-	sonnetWeekly: 'usage.label_sonnet_weekly',
-	opusWeekly: 'usage.label_opus_weekly'
+const LIMIT_KEYS = ['session', 'weekly', 'sonnetWeekly', 'opusWeekly', 'fableWeekly'];
+const LIMIT_LABELS = {
+	session: 'Session (5h)',
+	weekly: 'Weekly (All Models)',
+	sonnetWeekly: 'Weekly (Sonnet)',
+	opusWeekly: 'Weekly (Opus)',
+	fableWeekly: 'Weekly (Fable)'
 };
 
-const SHORT_LABELS = {
-	session: 'Session',
-	weekly: 'Weekly',
-	sonnetWeekly: 'Sonnet',
-	opusWeekly: 'Opus'
-};
+let accountsData = [];
+let notesDebounceTimers = {};
 
-const WARNING_THRESHOLD = 0.9;
-const noteSaveTimers = new Map(); // orgId -> timeout handle
+document.addEventListener('DOMContentLoaded', initDashboard);
 
-function colorForPct(pct) {
-	if (pct >= 100) return 'var(--red)';
-	if (pct >= WARNING_THRESHOLD * 100) return 'var(--amber)';
-	return 'var(--green)';
+async function initDashboard() {
+	document.getElementById('refresh-btn').addEventListener('click', loadAccounts);
+	document.getElementById('open-options').addEventListener('click', () => {
+		browser.runtime.openOptionsPage();
+	});
+	await loadAccounts();
+	await loadAllNicknames();
+	startCountdownTimers();
 }
 
-function formatResetTime(timestamp) {
-	if (!timestamp) return '';
-	const diff = timestamp - Date.now();
-	if (diff <= 0) return 'Resetting…';
+async function loadAccounts() {
+	const main = document.getElementById('main-content');
+	main.innerHTML = `
+		<div class="loading-state">
+			<span class="loading-spinner"></span> Loading accounts...
+		</div>
+	`;
 
-	const hours = Math.floor(diff / (1000 * 60 * 60));
-	const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-	const resetDate = new Date(timestamp);
-	const timeStr = resetDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-
-	if (hours >= 24) {
-		const days = Math.floor(hours / 24);
-		const remainingHours = hours % 24;
-		return `Resets in ${days}d ${remainingHours}h · ${timeStr}`;
+	try {
+		const response = await browser.runtime.sendMessage({ type: 'getPopupUsageData' });
+		accountsData = response || [];
+		renderAccounts();
+		await loadAllNicknames();
+	} catch (err) {
+		main.innerHTML = `
+			<div class="error-state">
+				<h2>Failed to load accounts</h2>
+				<p>${err.message}</p>
+				<button class="btn btn-primary" id="retry-btn">Retry</button>
+			</div>
+		`;
+		document.getElementById('retry-btn').addEventListener('click', loadAccounts);
 	}
-	if (hours === 0) return `Resets in ${minutes}m · ${timeStr}`;
-	return `Resets in ${hours}h ${minutes}m · ${timeStr}`;
 }
 
-function initials(text) {
-	if (!text) return '?';
-	const cleaned = text.replace(/@.*/, '');
-	const parts = cleaned.split(/[.\s_-]+/).filter(Boolean);
-	if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-	return cleaned.substring(0, 2).toUpperCase();
+function renderAccounts() {
+	const main = document.getElementById('main-content');
+
+	if (!accountsData.length) {
+		main.innerHTML = `
+			<div class="empty-state">
+				<div class="empty-state-icon">📭</div>
+				<h2>No accounts found</h2>
+				<p>Open Claude.ai in your browser to start tracking usage.</p>
+				<button class="btn btn-primary" id="refresh-btn-empty">Refresh</button>
+			</div>
+		`;
+		document.getElementById('refresh-btn-empty').addEventListener('click', loadAccounts);
+		return;
+	}
+
+	main.innerHTML = '<div class="accounts-grid" id="accounts-grid"></div>';
+	const grid = document.getElementById('accounts-grid');
+
+	for (const account of accountsData) {
+		const card = createAccountCard(account);
+		grid.appendChild(card);
+	}
 }
 
-function overallStatus(activeLimits) {
-	if (activeLimits.length === 0) return { label: 'No active limits', cls: 'badge-ok' };
-	const maxPct = Math.max(...activeLimits.map(l => l.percentage));
-	if (maxPct >= 100) return { label: 'Limit hit', cls: 'badge-maxed' };
-	if (maxPct >= WARNING_THRESHOLD * 100) return { label: 'Near limit', cls: 'badge-warn' };
-	return { label: 'Active', cls: 'badge-ok' };
-}
-
-function buildMeter(key, limit) {
-	const wrap = document.createElement('div');
-
-	const label = document.createElement('div');
-	label.className = 'meter-label';
-	const name = document.createElement('span');
-	name.textContent = (LIMIT_LABEL_KEYS[key] && typeof localize === 'function')
-		? (localize(LIMIT_LABEL_KEYS[key]) || SHORT_LABELS[key] || key)
-		: (SHORT_LABELS[key] || key);
-	const pct = document.createElement('span');
-	pct.className = 'meter-pct';
-	pct.textContent = `${limit.percentage.toFixed(0)}%`;
-	pct.style.color = colorForPct(limit.percentage);
-	label.appendChild(name);
-	label.appendChild(pct);
-
-	const track = document.createElement('div');
-	track.className = 'bar-track';
-	const fill = document.createElement('div');
-	fill.className = 'bar-fill';
-	fill.style.width = `${Math.min(limit.percentage, 100)}%`;
-	fill.style.background = colorForPct(limit.percentage);
-	track.appendChild(fill);
-
-	const reset = document.createElement('div');
-	reset.className = 'reset-text';
-	reset.dataset.resetsAt = limit.resetsAt || '';
-	reset.textContent = formatResetTime(limit.resetsAt);
-
-	wrap.appendChild(label);
-	wrap.appendChild(track);
-	wrap.appendChild(reset);
-	return wrap;
-}
-
-async function saveNote(orgId, note) {
-	await chrome.runtime.sendMessage({ type: 'setAccountNote', orgId, note });
-}
-
-async function saveNickname(orgId, nickname) {
-	await chrome.runtime.sendMessage({ type: 'setAccountNickname', orgId, nickname });
-}
-
-function debounceSave(map, key, fn) {
-	if (map.has(key)) clearTimeout(map.get(key));
-	const handle = setTimeout(fn, 600);
-	map.set(key, handle);
-}
-
-async function buildAccountCard(orgResult) {
-	const { orgId, orgName, email, usageData: usageJSON } = orgResult;
-	const usageData = new UsageData(usageJSON);
-	const activeLimits = usageData.getActiveLimits();
-
+function createAccountCard(account) {
 	const card = document.createElement('div');
-	card.className = 'account-card';
+	card.className = `account-card${account.error ? ' unavailable' : ''}`;
+	card.dataset.orgId = account.orgId;
 
-	// --- top row ---
-	const top = document.createElement('div');
-	top.className = 'card-top';
-
-	const avatar = document.createElement('div');
-	avatar.className = 'avatar';
-	avatar.textContent = initials(email || orgName || orgId);
-
-	const meta = document.createElement('div');
-	meta.className = 'card-meta';
-
-	const nicknameInput = document.createElement('input');
-	nicknameInput.className = 'nickname-input';
-	nicknameInput.type = 'text';
-	nicknameInput.placeholder = orgName || 'Account';
-	const storedNickname = await chrome.runtime.sendMessage({ type: 'getAccountNickname', orgId });
-	nicknameInput.value = storedNickname || '';
-	nicknameInput.addEventListener('input', () => {
-		debounceSave(noteSaveTimers, `nick_${orgId}`, () => saveNickname(orgId, nicknameInput.value));
-	});
-
-	const emailEl = document.createElement('div');
-	emailEl.className = 'card-email';
-	emailEl.textContent = email || orgName || orgId.substring(0, 16) + '…';
-
-	meta.appendChild(nicknameInput);
-	meta.appendChild(emailEl);
-
-	const status = overallStatus(activeLimits);
-	const badge = document.createElement('span');
-	badge.className = `status-badge ${status.cls}`;
-	badge.textContent = status.label;
-
-	top.appendChild(avatar);
-	top.appendChild(meta);
-	top.appendChild(badge);
-	card.appendChild(top);
-
-	// --- meters ---
-	if (activeLimits.length > 0) {
-		const meters = document.createElement('div');
-		meters.className = 'meters';
-		for (const limit of activeLimits) {
-			meters.appendChild(buildMeter(limit.key, limit));
-		}
-		card.appendChild(meters);
-	} else {
-		const empty = document.createElement('div');
-		empty.className = 'dash-empty';
-		empty.style.padding = '8px 0';
-		empty.textContent = 'No active limits right now.';
-		card.appendChild(empty);
+	if (account.error) {
+		card.innerHTML = createUnavailableAccountHTML(account);
+		return card;
 	}
 
-	// --- note area ---
-	const noteArea = document.createElement('div');
-	noteArea.className = 'note-area';
+	const nickname = getNickname(account.orgId) || '';
+	const email = account.email || 'Unknown email';
+	const usageData = account.usageData;
+	const orgName = account.orgName || account.orgId;
 
-	const noteLabel = document.createElement('div');
-	noteLabel.className = 'note-label';
-	noteLabel.innerHTML = `📝 Note for when this resets <span class="note-saved" id="saved-${orgId}">Saved</span>`;
+	card.innerHTML = `
+		<div class="account-header">
+			<div class="account-avatar">${escapeHtml(getInitials(orgName))}</div>
+			<div class="account-info">
+				<div class="account-name-row">
+					<h3 class="account-nickname" data-org-id="${account.orgId}" data-has-nickname="${nickname ? 'true' : 'false'}">${escapeHtml(nickname || orgName)}</h3>
+					<span class="status-badge ${getStatusClass(usageData)}">
+						<span class="status-dot"></span> ${getStatusText(usageData)}
+					</span>
+				</div>
+				<p class="account-email">${escapeHtml(email)}</p>
+			</div>
+		</div>
+		${createUsageHTML(usageData)}
+		${createNotesHTML(account.orgId)}
+	`;
 
-	const noteInput = document.createElement('textarea');
-	noteInput.className = 'note-input';
-	noteInput.placeholder = 'e.g. Continue the AI Palette GTM strategy, finish slide 7…';
-	const storedNote = await chrome.runtime.sendMessage({ type: 'getAccountNote', orgId });
-	noteInput.value = storedNote || '';
-
-	noteInput.addEventListener('input', () => {
-		debounceSave(noteSaveTimers, `note_${orgId}`, async () => {
-			await saveNote(orgId, noteInput.value);
-			const savedEl = document.getElementById(`saved-${orgId}`);
-			if (savedEl) {
-				savedEl.classList.add('show');
-				setTimeout(() => savedEl.classList.remove('show'), 1500);
-			}
-		});
-	});
-
-	noteArea.appendChild(noteLabel);
-	noteArea.appendChild(noteInput);
-	card.appendChild(noteArea);
-
+	attachCardListeners(card, account.orgId, orgName, nickname);
 	return card;
 }
 
-async function loadDashboard() {
-	const container = document.getElementById('accounts-container');
+function createUnavailableAccountHTML(account) {
+	const orgName = account.orgName || account.orgId;
+	const email = account.email || 'Unknown email';
+	return `
+		<div class="account-header">
+			<div class="account-avatar">${escapeHtml(getInitials(orgName))}</div>
+			<div class="account-info">
+				<div class="account-name-row">
+					<h3 class="account-nickname">${escapeHtml(orgName)}</h3>
+					<span class="status-badge gray">
+						<span class="status-dot"></span> Unavailable
+					</span>
+				</div>
+				<p class="account-email">${escapeHtml(email)}</p>
+			</div>
+		</div>
+		<div style="color: var(--text-muted); font-size: 13px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px;">
+			${escapeHtml(account.error)}
+		</div>
+	`;
+}
 
+function createUsageHTML(usageData) {
+	if (!usageData || !usageData.limits) {
+		return '<div class="usage-section"><h4>Usage</h4><p style="color: var(--text-muted);">No usage data available</p></div>';
+	}
+
+	const activeLimits = Object.entries(usageData.limits)
+		.filter(([_, limit]) => limit !== null)
+		.map(([key, limit]) => ({ key, ...limit }));
+
+	if (activeLimits.length === 0) {
+		return '<div class="usage-section"><h4>Usage</h4><p style="color: var(--text-muted);">No active limits</p></div>';
+	}
+
+	let html = '<div class="usage-section"><h4>Usage Limits</h4>';
+	for (const limit of activeLimits) {
+		html += createLimitRowHTML(limit);
+	}
+	html += '</div>';
+	return html;
+}
+
+function createLimitRowHTML(limit) {
+	const pct = limit.percentage ?? 0;
+	const pctClass = getPercentageClass(pct);
+	const label = LIMIT_LABELS[limit.key] || limit.key;
+	const resetHtml = limit.resetsAt
+		? `<div class="limit-reset" data-resets-at="${limit.resetsAt}">${formatResetTime(limit.resetsAt)}</div>`
+		: '';
+
+	return `
+		<div class="limit-row">
+			<div class="limit-header">
+				<span class="limit-label">${escapeHtml(label)}</span>
+				<span class="limit-percentage ${pctClass}">${pct.toFixed(0)}%</span>
+			</div>
+			<div class="progress-track">
+				<div class="progress-bar ${pctClass}" style="width: ${Math.min(pct, 100)}%"></div>
+			</div>
+			${resetHtml}
+		</div>
+	`;
+}
+
+function createNotesHTML(orgId) {
+	let note = '';
 	try {
-		const stored = await browser.storage.local.get('lastLang');
-		if (typeof setLocaleOverride === 'function') setLocaleOverride(stored.lastLang || 'en');
+		note = localStorage.getItem(`usageos_note_${orgId}`) || '';
+	} catch (e) {
+		note = '';
+	}
 
-		const results = await chrome.runtime.sendMessage({ type: 'getPopupUsageData' });
+	return `
+		<div class="notes-section">
+			<label class="notes-label">Notes</label>
+			<textarea class="notes-textarea" data-org-id="${orgId}" placeholder="Add notes for this account... (auto-saves)">${escapeHtml(note)}</textarea>
+			<div class="notes-saved-indicator" data-org-id="${orgId}">Saved</div>
+		</div>
+	`;
+}
 
-		if (!results || results.length === 0) {
-			container.innerHTML = '<div class="dash-empty">No Claude accounts detected yet. Open claude.ai in a tab and send a message, then refresh.</div>';
-			return;
-		}
+function attachCardListeners(card, orgId, orgName, currentNickname) {
+	const nicknameEl = card.querySelector('.account-nickname');
+	if (nicknameEl) {
+		nicknameEl.addEventListener('click', () => startEditingNickname(nicknameEl, orgId, orgName));
+	}
 
-		const validResults = results.filter(r => !r.error);
-		if (validResults.length === 0) {
-			container.innerHTML = '<div class="dash-empty">Couldn\'t load account data. Try refreshing.</div>';
-			return;
-		}
-
-		container.innerHTML = '';
-		for (const orgResult of validResults) {
-			container.appendChild(await buildAccountCard(orgResult));
-		}
-
-		// Live-update reset countdowns every 30s without a full reload
-		setInterval(() => {
-			document.querySelectorAll('[data-resets-at]').forEach(el => {
-				const resetsAt = parseInt(el.dataset.resetsAt);
-				if (resetsAt) el.textContent = formatResetTime(resetsAt);
-			});
-		}, 30000);
-	} catch (error) {
-		console.error('Error loading dashboard:', error);
-		container.innerHTML = '<div class="dash-empty">Failed to load usage data.</div>';
+	const notesTextarea = card.querySelector('.notes-textarea');
+	if (notesTextarea) {
+		notesTextarea.addEventListener('input', () => scheduleNoteSave(orgId, notesTextarea));
 	}
 }
 
-document.getElementById('refresh-btn').addEventListener('click', () => {
-	document.getElementById('accounts-container').innerHTML = '<div class="dash-loading">Refreshing…</div>';
-	loadDashboard();
-});
+function startEditingNickname(nicknameEl, orgId, orgName) {
+	const currentNickname = nicknameEl.dataset.hasNickname === 'true' ? nicknameEl.textContent : '';
+	const input = document.createElement('input');
+	input.type = 'text';
+	input.className = 'account-nickname-input';
+	input.value = currentNickname;
+	input.placeholder = orgName;
+	input.dataset.orgId = orgId;
 
-document.getElementById('add-account-btn').addEventListener('click', () => {
-	chrome.tabs.create({ url: 'https://claude.ai/login' });
-});
+	const finish = async () => {
+		const newNickname = input.value.trim();
+		input.remove();
+		nicknameEl.style.display = '';
 
-loadDashboard();
+		if (newNickname) {
+			nicknameEl.textContent = newNickname;
+			nicknameEl.dataset.hasNickname = 'true';
+		} else {
+			nicknameEl.textContent = orgName;
+			nicknameEl.dataset.hasNickname = 'false';
+		}
+		await saveNickname(orgId, newNickname);
+	};
+
+	nicknameEl.style.display = 'none';
+	nicknameEl.parentNode.insertBefore(input, nicknameEl.nextSibling);
+	input.focus();
+	input.select();
+
+	input.addEventListener('blur', finish);
+	input.addEventListener('keydown', (e) => {
+		if (e.key === 'Enter') finish();
+		if (e.key === 'Escape') {
+			input.remove();
+			nicknameEl.style.display = '';
+		}
+	});
+}
+
+function scheduleNoteSave(orgId, textarea) {
+	clearTimeout(notesDebounceTimers[orgId]);
+	notesDebounceTimers[orgId] = setTimeout(() => saveNote(orgId, textarea), 600);
+}
+
+async function saveNote(orgId, textarea) {
+	const note = textarea.value;
+	try {
+		await browser.storage.local.set({ [`usageos_note_${orgId}`]: note });
+		showSavedIndicator(orgId);
+	} catch (e) {
+		localStorage.setItem(`usageos_note_${orgId}`, note);
+		showSavedIndicator(orgId);
+	}
+}
+
+function showSavedIndicator(orgId) {
+	const indicator = document.querySelector(`.notes-saved-indicator[data-org-id="${orgId}"]`);
+	if (indicator) {
+		indicator.classList.add('visible');
+		setTimeout(() => indicator.classList.remove('visible'), 2000);
+	}
+}
+
+async function saveNickname(orgId, nickname) {
+	try {
+		await browser.storage.sync.set({ [`accountNickname_${orgId}`]: nickname });
+	} catch (e) {
+		try {
+			await browser.storage.local.set({ [`accountNickname_${orgId}`]: nickname });
+		} catch (e2) {
+			localStorage.setItem(`accountNickname_${orgId}`, nickname);
+		}
+	}
+}
+
+async function loadAllNicknames() {
+	for (const account of accountsData) {
+		if (account.error) continue;
+		let nickname = '';
+		try {
+			const result = await browser.storage.sync.get(`accountNickname_${account.orgId}`);
+			nickname = result[`accountNickname_${account.orgId}`] || '';
+		} catch (e) {
+			try {
+				const result = await browser.storage.local.get(`accountNickname_${account.orgId}`);
+				nickname = result[`accountNickname_${account.orgId}`] || '';
+			} catch (e2) {
+				nickname = localStorage.getItem(`accountNickname_${account.orgId}`) || '';
+			}
+		}
+		const nicknameEl = document.querySelector(`.account-nickname[data-org-id="${account.orgId}"]`);
+		if (nicknameEl && nickname) {
+			nicknameEl.textContent = nickname;
+			nicknameEl.dataset.hasNickname = 'true';
+		}
+	}
+}
+
+function getStatusClass(usageData) {
+	if (!usageData || !usageData.limits) return 'gray';
+	const maxPct = Math.max(...Object.values(usageData.limits)
+		.filter(l => l !== null)
+		.map(l => l.percentage ?? 0), 0);
+	if (maxPct >= 100) return 'red';
+	if (maxPct >= 80) return 'amber';
+	return 'green';
+}
+
+function getStatusText(usageData) {
+	if (!usageData || !usageData.limits) return 'Unknown';
+	const maxPct = Math.max(...Object.values(usageData.limits)
+		.filter(l => l !== null)
+		.map(l => l.percentage ?? 0), 0);
+	if (maxPct >= 100) return 'At Limit';
+	if (maxPct >= 80) return 'High Usage';
+	return 'Normal';
+}
+
+function getPercentageClass(pct) {
+	if (pct >= 100) return 'red';
+	if (pct >= 80) return 'amber';
+	return 'green';
+}
+
+function getInitials(name) {
+	return name
+		.split(/\s+/)
+		.map(w => w[0])
+		.slice(0, 2)
+		.join('')
+		.toUpperCase() || '?';
+}
+
+function getNickname(orgId) {
+	return localStorage.getItem(`accountNickname_${orgId}`) || '';
+}
+
+function formatResetTime(timestamp) {
+	const diff = timestamp - Date.now();
+	if (diff <= 0) return 'Resetting...';
+	const hours = Math.floor(diff / (1000 * 60 * 60));
+	const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+	if (hours >= 24) {
+		const days = Math.floor(hours / 24);
+		const remHours = hours % 24;
+		return `${days}d ${remHours}h`;
+	}
+	if (hours > 0) return `${hours}h ${minutes}m`;
+	return `${minutes}m`;
+}
+
+function startCountdownTimers() {
+	setInterval(() => {
+		document.querySelectorAll('[data-resets-at]').forEach(el => {
+			const resetsAt = parseInt(el.dataset.resetsAt);
+			if (resetsAt) el.textContent = formatResetTime(resetsAt);
+		});
+	}, 30000);
+}
+
+function escapeHtml(text) {
+	const div = document.createElement('div');
+	div.textContent = text;
+	return div.innerHTML;
+}

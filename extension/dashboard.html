@@ -1,280 +1,410 @@
 <!DOCTYPE html>
 <html>
-
 <head>
 	<meta charset="utf-8">
-	<title>Claude Usage Dashboard</title>
+	<title>UsageOS Dashboard</title>
 	<link rel="stylesheet" href="tracker-styles.css">
 	<style>
 		:root {
 			--bg-primary: #1e1e1e;
 			--bg-secondary: #252526;
-			--bg-card: #2a2a2c;
+			--bg-tertiary: #2d2d2d;
 			--text-primary: #d4d4d4;
 			--text-secondary: #9cdcfe;
-			--text-muted: #8a8a8a;
+			--text-muted: #888;
 			--button-bg: #2d2d2d;
 			--button-hover: #3e3e3e;
 			--button-active: #505050;
-			--border-color: #3e3e3e;
-			--accent: #d97757;
-			--green: #4ade80;
-			--amber: #f0a93f;
-			--red: #e2554f;
+			--border-color: #454545;
+			--accent-blue: #2c84db;
+			--accent-green: #22c55e;
+			--accent-amber: #f59e0b;
+			--accent-red: #de2929;
+			--card-radius: 8px;
+			--shadow: 0 2px 8px rgba(0,0,0,0.3);
 		}
 
-		* { box-sizing: border-box; }
+		* {
+			box-sizing: border-box;
+		}
 
 		body {
 			margin: 0;
-			padding: 0;
+			padding: 24px;
 			background-color: var(--bg-primary);
 			color: var(--text-primary);
 			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 			font-size: 14px;
 			line-height: 1.5;
+			min-width: 900px;
 		}
 
-		.dash-wrap {
-			max-width: 760px;
-			margin: 0 auto;
-			padding: 28px 20px 60px;
-		}
-
-		.dash-top {
+		.dashboard-header {
 			display: flex;
-			align-items: center;
 			justify-content: space-between;
-			margin-bottom: 28px;
-		}
-
-		.dash-logo {
-			display: flex;
 			align-items: center;
-			gap: 8px;
-			font-size: 16px;
+			margin-bottom: 24px;
+			padding-bottom: 16px;
+			border-bottom: 1px solid var(--border-color);
+		}
+
+		.dashboard-title {
+			font-size: 24px;
 			font-weight: 600;
+			margin: 0;
+			color: var(--text-primary);
 		}
 
-		.dash-logo .dot {
-			width: 10px;
-			height: 10px;
-			border-radius: 50%;
-			background: var(--accent);
+		.dashboard-subtitle {
+			font-size: 13px;
+			color: var(--text-muted);
+			margin-top: 4px;
 		}
 
-		.dash-actions { display: flex; gap: 8px; }
+		.header-actions {
+			display: flex;
+			gap: 8px;
+		}
 
-		.dash-btn {
+		.btn {
 			background: var(--button-bg);
 			color: var(--text-primary);
 			border: 1px solid var(--border-color);
-			padding: 7px 14px;
-			border-radius: 6px;
+			padding: 8px 16px;
+			border-radius: 4px;
 			cursor: pointer;
 			font-size: 13px;
+			font-weight: 500;
+			transition: background-color 0.2s, transform 0.1s;
 		}
 
-		.dash-btn:hover { background: var(--button-hover); }
-		.dash-btn:active { background: var(--button-active); }
-
-		.dash-btn.primary {
-			background: var(--accent);
-			border-color: var(--accent);
-			color: #1a1a1a;
-			font-weight: 600;
+		.btn:hover {
+			background: var(--button-hover);
 		}
 
-		.dash-btn.primary:hover { filter: brightness(1.08); }
+		.btn:active {
+			background: var(--button-active);
+			transform: translateY(1px);
+		}
 
-		.section-label {
-			font-size: 11px;
-			text-transform: uppercase;
-			letter-spacing: 0.06em;
-			color: var(--text-muted);
-			margin-bottom: 12px;
-			font-weight: 600;
+		.btn-primary {
+			background: var(--accent-blue);
+			border-color: var(--accent-blue);
+			color: white;
+		}
+
+		.btn-primary:hover {
+			background: #3a93e8;
+		}
+
+		.accounts-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+			gap: 16px;
 		}
 
 		.account-card {
-			background: var(--bg-card);
+			background: var(--bg-secondary);
 			border: 1px solid var(--border-color);
-			border-radius: 10px;
-			padding: 16px 18px;
-			margin-bottom: 14px;
+			border-radius: var(--card-radius);
+			padding: 20px;
+			box-shadow: var(--shadow);
+			transition: border-color 0.2s, box-shadow 0.2s;
 		}
 
-		.card-top {
+		.account-card:hover {
+			border-color: #555;
+			box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+		}
+
+		.account-card.unavailable {
+			opacity: 0.6;
+			border-color: var(--accent-amber);
+		}
+
+		.account-header {
 			display: flex;
-			align-items: center;
+			align-items: flex-start;
 			gap: 12px;
-			margin-bottom: 14px;
+			margin-bottom: 16px;
 		}
 
-		.avatar {
-			width: 38px;
-			height: 38px;
+		.account-avatar {
+			width: 48px;
+			height: 48px;
 			border-radius: 50%;
-			background: var(--accent);
-			color: #1a1a1a;
+			background: var(--accent-blue);
+			color: white;
 			display: flex;
 			align-items: center;
 			justify-content: center;
-			font-weight: 700;
-			font-size: 13px;
+			font-size: 18px;
+			font-weight: 600;
 			flex-shrink: 0;
 		}
 
-		.card-meta { flex: 1; min-width: 0; }
-
-		.nickname-input {
-			background: transparent;
-			border: none;
-			color: var(--text-primary);
-			font-size: 14px;
-			font-weight: 600;
-			padding: 2px 0;
-			width: 100%;
-			border-bottom: 1px solid transparent;
+		.account-info {
+			flex: 1;
+			min-width: 0;
 		}
 
-		.nickname-input:hover, .nickname-input:focus {
-			border-bottom: 1px solid var(--border-color);
-			outline: none;
+		.account-name-row {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			margin-bottom: 4px;
 		}
 
-		.card-email {
-			font-size: 12px;
-			color: var(--text-muted);
+		.account-email {
+			font-size: 13px;
+			color: var(--text-secondary);
+			margin: 0;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			white-space: nowrap;
 		}
 
-		.status-badge {
-			font-size: 11px;
-			padding: 3px 9px;
-			border-radius: 99px;
-			font-weight: 600;
-			white-space: nowrap;
-			flex-shrink: 0;
+		.account-nickname {
+			font-size: 14px;
+			font-weight: 500;
+			margin: 0;
+			color: var(--text-primary);
 		}
 
-		.badge-ok { background: rgba(74, 222, 128, 0.15); color: var(--green); }
-		.badge-warn { background: rgba(240, 169, 63, 0.15); color: var(--amber); }
-		.badge-maxed { background: rgba(226, 85, 79, 0.15); color: var(--red); }
+		.account-nickname.editing {
+			display: none;
+		}
 
-		.meters {
-			display: grid;
-			grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-			gap: 12px;
+		.account-nickname-input {
+			background: var(--bg-tertiary);
+			border: 1px solid var(--border-color);
+			border-radius: 4px;
+			padding: 4px 8px;
+			color: var(--text-primary);
+			font-size: 14px;
+			font-family: inherit;
+			width: 100%;
+			max-width: 250px;
+		}
+
+		.account-nickname-input:focus {
+			outline: none;
+			border-color: var(--accent-blue);
+			box-shadow: 0 0 0 2px rgba(44, 132, 219, 0.2);
+		}
+
+		.status-badge {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			padding: 4px 10px;
+			border-radius: 999px;
+			font-size: 11px;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.3px;
+		}
+
+		.status-badge.green { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
+		.status-badge.amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); }
+		.status-badge.red { background: rgba(222, 41, 41, 0.15); color: var(--accent-red); }
+		.status-badge.gray { background: var(--bg-tertiary); color: var(--text-muted); }
+
+		.status-dot {
+			width: 6px;
+			height: 6px;
+			border-radius: 50%;
+			background: currentColor;
+		}
+
+		.usage-section {
+			margin-top: 16px;
+		}
+
+		.usage-section h4 {
+			font-size: 12px;
+			font-weight: 600;
+			color: var(--text-muted);
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+			margin: 0 0 12px 0;
+		}
+
+		.limit-row {
 			margin-bottom: 12px;
 		}
 
-		.meter-label {
-			font-size: 11px;
-			color: var(--text-muted);
-			margin-bottom: 4px;
-			display: flex;
-			justify-content: space-between;
+		.limit-row:last-child {
+			margin-bottom: 0;
 		}
 
-		.meter-pct { font-weight: 600; color: var(--text-primary); }
+		.limit-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 6px;
+		}
 
-		.bar-track {
-			height: 5px;
-			background: #1a1a1a;
+		.limit-label {
+			font-size: 12px;
+			color: var(--text-secondary);
+			font-weight: 500;
+		}
+
+		.limit-percentage {
+			font-size: 13px;
+			font-weight: 600;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.limit-percentage.green { color: var(--accent-green); }
+		.limit-percentage.amber { color: var(--accent-amber); }
+		.limit-percentage.red { color: var(--accent-red); }
+
+		.progress-track {
+			height: 6px;
+			background: var(--bg-tertiary);
 			border-radius: 3px;
 			overflow: hidden;
 		}
 
-		.bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
-
-		.reset-text {
-			font-size: 11px;
-			color: var(--text-muted);
-			margin-top: 2px;
+		.progress-bar {
+			height: 100%;
+			border-radius: 3px;
+			transition: width 0.3s ease;
 		}
 
-		.note-area { margin-top: 14px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+		.progress-bar.green { background: var(--accent-green); }
+		.progress-bar.amber { background: var(--accent-amber); }
+		.progress-bar.red { background: var(--accent-red); }
+		.progress-bar.gray { background: var(--text-muted); }
 
-		.note-label {
+		.limit-reset {
 			font-size: 11px;
 			color: var(--text-muted);
-			margin-bottom: 6px;
-			display: flex;
-			align-items: center;
-			gap: 5px;
+			margin-top: 4px;
+			text-align: right;
 		}
 
-		.note-input {
+		.notes-section {
+			margin-top: 20px;
+			padding-top: 16px;
+			border-top: 1px solid var(--border-color);
+		}
+
+		.notes-label {
+			font-size: 12px;
+			font-weight: 600;
+			color: var(--text-muted);
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+			margin-bottom: 8px;
+			display: block;
+		}
+
+		.notes-textarea {
 			width: 100%;
-			background: #1f1f20;
+			background: var(--bg-tertiary);
 			border: 1px solid var(--border-color);
 			border-radius: 6px;
+			padding: 10px 12px;
 			color: var(--text-primary);
 			font-size: 13px;
 			font-family: inherit;
-			padding: 8px 10px;
+			line-height: 1.5;
 			resize: vertical;
-			min-height: 44px;
+			min-height: 70px;
+			max-height: 150px;
+			transition: border-color 0.2s, box-shadow 0.2s;
 		}
 
-		.note-input:focus { outline: none; border-color: var(--accent); }
-		.note-input::placeholder { color: #5a5a5a; }
+		.notes-textarea:focus {
+			outline: none;
+			border-color: var(--accent-blue);
+			box-shadow: 0 0 0 2px rgba(44, 132, 219, 0.2);
+		}
 
-		.note-saved {
+		.notes-textarea::placeholder {
+			color: var(--text-muted);
+		}
+
+		.notes-saved-indicator {
 			font-size: 11px;
-			color: var(--green);
+			color: var(--text-muted);
+			margin-top: 6px;
+			text-align: right;
 			opacity: 0;
-			transition: opacity 0.3s ease;
-			margin-left: 6px;
+			transition: opacity 0.2s;
 		}
 
-		.note-saved.show { opacity: 1; }
+		.notes-saved-indicator.visible {
+			opacity: 1;
+		}
 
-		.dash-empty, .dash-loading {
-			color: var(--text-muted);
-			font-size: 13px;
-			padding: 24px 0;
+		.empty-state {
 			text-align: center;
+			padding: 48px 24px;
+			color: var(--text-muted);
 		}
 
-		.dash-help {
-			font-size: 12px;
-			color: var(--text-muted);
-			margin-top: 24px;
-			line-height: 1.6;
+		.empty-state-icon {
+			font-size: 48px;
+			margin-bottom: 16px;
+			opacity: 0.5;
+		}
+
+		.loading-state {
+			text-align: center;
+			padding: 48px 24px;
+			color: var(--text-secondary);
+		}
+
+		.loading-spinner {
+			display: inline-block;
+			width: 24px;
+			height: 24px;
+			border: 2px solid var(--border-color);
+			border-top-color: var(--accent-blue);
+			border-radius: 50%;
+			animation: spin 1s linear infinite;
+			margin-right: 12px;
+			vertical-align: middle;
+		}
+
+		@keyframes spin {
+			to { transform: rotate(360deg); }
+		}
+
+		.error-state {
+			text-align: center;
+			padding: 48px 24px;
+			color: var(--accent-red);
+		}
+
+		.error-state button {
+			margin-top: 16px;
 		}
 	</style>
 </head>
-
 <body>
-	<div class="dash-wrap">
-		<div class="dash-top">
-			<div class="dash-logo"><span class="dot"></span> Claude Usage Dashboard</div>
-			<div class="dash-actions">
-				<button class="dash-btn" id="refresh-btn">Refresh</button>
-				<button class="dash-btn primary" id="add-account-btn">+ Add account</button>
-			</div>
+	<header class="dashboard-header">
+		<div>
+			<h1 class="dashboard-title">UsageOS Dashboard</h1>
+			<p class="dashboard-subtitle">Multi-account Claude.ai usage overview</p>
 		</div>
-
-		<div class="section-label">Your accounts</div>
-		<div id="accounts-container">
-			<div class="dash-loading">Loading accounts…</div>
+		<div class="header-actions">
+			<button class="btn" id="refresh-btn">Refresh</button>
+			<button class="btn btn-primary" id="open-options">Settings</button>
 		</div>
+	</header>
 
-		<p class="dash-help">
-			"Add account" opens claude.ai in a new tab — sign in with a different email there and
-			this dashboard will pick it up automatically. Notes are saved per-account and sync via
-			your browser's account.
-		</p>
-	</div>
+	<main id="main-content">
+		<div class="loading-state">
+			<span class="loading-spinner"></span> Loading accounts...
+		</div>
+	</main>
 
 	<script src="lib/browser-polyfill.min.js"></script>
-	<script src="content-components/localization.js"></script>
-	<script src="content-components/ui_dataclasses.js"></script>
 	<script src="dashboard.js"></script>
 </body>
-
 </html>
