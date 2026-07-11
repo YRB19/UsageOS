@@ -1,50 +1,48 @@
-import type { DashboardAccount, SnapshotPoint } from "./types";
+import axios from 'axios';
+import type { AccountWithUsage, SyncEvent, NoteResponse } from './types';
 
-const BASE = import.meta.env.VITE_API_URL ?? "";
-const KEY  = import.meta.env.VITE_API_KEY  ?? "";
+const baseURL = import.meta.env.VITE_API_URL || '/api';
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${KEY}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
+export const api = axios.create({
+  baseURL,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+export async function getAccounts(): Promise<AccountWithUsage[]> {
+  const { data } = await api.get('/v1/accounts');
+  return data || [];
 }
 
-type AccountPatch = Partial<DashboardAccount> & {
-  notify_telegram?: boolean;
-  telegram_chat_id?: string | null;
-  notify_whatsapp?: boolean;
-  whatsapp_number?: string | null;
-  notify_reset?: boolean;
-  notify_threshold?: number | null;
-};
+export async function patchAccount(
+  accountId: string,
+  patch: { nickname?: string | null; color?: string; telegram_chat_id?: string | null }
+): Promise<AccountWithUsage> {
+  const { data } = await api.patch(`/v1/accounts/${accountId}`, patch);
+  return data;
+}
 
-export const api = {
-  dashboard: (): Promise<{ accounts: DashboardAccount[] }> =>
-    apiFetch("/api/v1/dashboard"),
+export async function getNote(accountId: string): Promise<NoteResponse> {
+  const { data } = await api.get(`/v1/accounts/${accountId}/note`);
+  return data;
+}
 
-  patchAccount: (id: string, body: AccountPatch) =>
-    apiFetch(`/api/v1/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+export async function putNote(accountId: string, content: string): Promise<NoteResponse> {
+  const { data } = await api.put(`/v1/accounts/${accountId}/note`, { content });
+  return data;
+}
 
-  getNote: (id: string): Promise<{ content: string; updated_at: string }> =>
-    apiFetch(`/api/v1/accounts/${id}/notes`),
+export async function getSyncHistory(accountId: string, limit = 50): Promise<SyncEvent[]> {
+  const { data } = await api.get(`/v1/accounts/${accountId}/sync-history`, {
+    params: { limit },
+  });
+  return data || [];
+}
 
-  putNote: (id: string, content: string) =>
-    apiFetch(`/api/v1/accounts/${id}/notes`, { method: "PUT", body: JSON.stringify({ content }) }),
-
-  history: (id: string, limitType = "session", days = 7): Promise<SnapshotPoint[]> =>
-    apiFetch(`/api/v1/accounts/${id}/history?limit_type=${limitType}&days=${days}`),
-
-  // Notifications
-  testNotification: (accountId: string, channel: "telegram" | "whatsapp") =>
-    apiFetch(`/api/v1/notifications/accounts/${accountId}/test`, {
-      method: "POST",
-      body: JSON.stringify({ channel }),
-    }),
-};
+export async function testConnection(): Promise<{ ok: boolean; data?: unknown }> {
+  try {
+    const { data } = await api.get('/v1/health');
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, data: error };
+  }
+}

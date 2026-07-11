@@ -1,110 +1,120 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DashboardAccount } from "../lib/types";
-import { AccountCard } from "../components/AccountCard";
-import { api } from "../lib/api";
+import { useEffect, useState, useCallback } from 'react';
+import { getAccounts } from '../lib/api';
+import { AccountCard } from '../components/AccountCard';
+import type { AccountWithUsage } from '../lib/types';
+import { RefreshCw, Loader2, Activity } from 'lucide-react';
 
-const POLL_MS = 60_000;
-const RESET_CHECK_MS = 10_000; // check for resets every 10s (was 30s)
+export default function Dashboard() {
+  const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-export function Dashboard() {
-  const [accounts, setAccounts] = useState<DashboardAccount[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
-  const [lastSync, setLastSync] = useState<Date | null>(null);
-  const timerRef                = useRef<ReturnType<typeof setInterval> | null>(null);
-  const resetCheckRef           = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetch = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const data = await api.dashboard();
-      setAccounts(data.accounts);
-      setLastSync(new Date());
+      setLoading(true);
       setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
+      const data = await getAccounts();
+      setAccounts(data || []);
+      setLastUpdated(new Date());
+    } catch (err) {
+      setError('Failed to load dashboard data');
+      console.error(err);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Check if any limit has reset since last fetch - if so, trigger immediate refetch
-  const checkForResets = useCallback(() => {
-    const now = Date.now();
-    const hasPendingReset = accounts.some((acc) => {
-      return Object.values(acc.current_usage).some((usage) => {
-        if (!usage?.resets_at) return false;
-        const resetTime = new Date(usage.resets_at).getTime();
-        // If reset happened within last check window + 30s buffer
-        return resetTime <= now && resetTime > now - RESET_CHECK_MS - 30_000;
-      });
-    });
-    if (hasPendingReset) {
-      fetch();
-    }
-  }, [accounts, fetch]);
-
   useEffect(() => {
-    fetch();
-    timerRef.current = setInterval(fetch, POLL_MS);
-    // Separate interval to catch resets between polls
-    resetCheckRef.current = setInterval(checkForResets, RESET_CHECK_MS);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (resetCheckRef.current) clearInterval(resetCheckRef.current);
-    };
-  }, [fetch, checkForResets]);
+    fetchData();
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
-  const handleUpdate = (id: string, patch: Partial<DashboardAccount>) => {
-    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+  const handleAccountUpdated = (id: string, patch: Partial<AccountWithUsage>) => {
+    setAccounts(prev =>
+      prev.map(a => (a.id === id ? { ...a, ...patch } : a))
+    );
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* ── Top bar ─────────────────────────────────── */}
-      <header className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#d97757] inline-block" />
-          <span className="text-sm font-semibold tracking-tight">ATLAS · Claude</span>
-        </div>
-        <div className="flex items-center gap-4">
-          {lastSync && (
-            <span className="text-[11px] text-zinc-500">
-              Updated {lastSync.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-            </span>
-          )}
-          <button
-            onClick={fetch}
-            className="text-[12px] text-zinc-400 hover:text-zinc-100 transition-colors border border-zinc-700 rounded px-3 py-1"
-          >
-            Refresh
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#0a0a0a]">
+      <div className="max-w-6xl mx-auto px-6 py-10">
+        <header className="flex items-end justify-between mb-10">
+          <div>
+            <h1 className="text-xl font-semibold text-neutral-100 tracking-tight">
+              UsageOS
+            </h1>
+            <p className="text-[13px] text-neutral-500 mt-1">
+              Multi-account Claude usage tracker
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Syncing...' : 'Refresh'}
+            </button>
+            {lastUpdated && (
+              <span className="text-[11px] font-mono text-neutral-600">
+                {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+          </div>
+        </header>
 
-      {/* ── Content ─────────────────────────────────── */}
-      <main className="max-w-3xl mx-auto px-4 py-8">
-        {loading && (
-          <div className="text-zinc-500 text-sm text-center py-16">Loading accounts…</div>
-        )}
-
-        {error && !loading && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400 text-sm">
-            {error}
+        {error && (
+          <div className="mb-8 p-4 border border-red-500/20 rounded-lg text-[13px] text-red-400 flex items-center gap-3">
+            <Activity className="h-4 w-4 flex-shrink-0" />
+            <span>{error}</span>
+            <button
+              onClick={fetchData}
+              className="ml-auto text-[12px] text-red-400/60 hover:text-red-400 transition-colors"
+            >
+              Retry
+            </button>
           </div>
         )}
 
-        {!loading && !error && accounts.length === 0 && (
-          <div className="text-zinc-500 text-sm text-center py-16">
-            No accounts tracked yet. Open Claude in a tab and send a message.
+        {!loading && accounts.length === 0 && !error && (
+          <div className="text-center py-20">
+            <div className="w-12 h-12 mx-auto mb-4 rounded-full border border-white/[0.06] flex items-center justify-center">
+              <Activity className="w-5 h-5 text-neutral-600" />
+            </div>
+            <h2 className="text-[15px] font-medium text-neutral-400 mb-2">No accounts connected</h2>
+            <p className="text-[13px] text-neutral-600 max-w-sm mx-auto">
+              Install the UsageOS extension and sign in to your Claude accounts to begin tracking usage.
+            </p>
           </div>
         )}
 
-        <div className="flex flex-col gap-4">
-          {accounts.map((account) => (
-            <AccountCard key={account.id} account={account} onUpdate={handleUpdate} />
-          ))}
-        </div>
-      </main>
+        {loading && accounts.length === 0 && (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="h-6 w-6 animate-spin text-neutral-600" />
+          </div>
+        )}
+
+        {accounts.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {accounts.map(account => (
+              <AccountCard
+                key={account.id}
+                account={account}
+                onAccountUpdated={handleAccountUpdated}
+              />
+            ))}
+          </div>
+        )}
+
+        <footer className="mt-16 pb-8 text-center">
+          <p className="text-[11px] font-mono text-neutral-700">
+            UsageOS v1.0 &middot; {accounts.length} account{accounts.length !== 1 ? 's' : ''}
+          </p>
+        </footer>
+      </div>
     </div>
   );
 }
