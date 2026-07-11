@@ -1,100 +1,56 @@
-"""
-POST /api/v1/sync
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.database import get_sync_db
+from app.models import Account, SyncEvent
+from app.schemas import SyncPayload, SyncResponse, SyncEventOut, HealthResponse
+from app.auth import verify_api_key
+from datetime import datetime
+from uuid import UUID
 
-Called by the Chrome extension after every Claude message completion.
-Upserts account + current_usage, appends usage_snapshots.
-"""
+router = APIRouter()
 
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+@router.get("/health", response_model=HealthResponse)
+async def health_check():
+    return {"status": "ok"}
 
-from ..auth import require_api_key
-from ..database import get_db
-from ..models import Provider, Account, UsageSnapshot, CurrentUsage
-from ..schemas import SyncRequest, SyncResponse
-
-router = APIRouter(prefix="/api/v1", tags=["sync"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-@router.post("/sync", response_model=SyncResponse, dependencies=[Depends(require_api_key)])
-async def sync_usage(payload: SyncRequest, db: AsyncSession = Depends(get_db)):
-    # 1. Resolve provider
-    provider = (await db.execute(
-        select(Provider).where(Provider.slug == payload.provider)
-    )).scalar_one_or_none()
-
-    if not provider:
-        from ..models import Provider as P
-        provider = P(slug=payload.provider, display_name=payload.provider.capitalize())
-        db.add(provider)
-        await db.flush()
-
-    # 2. Upsert account
-    stmt = (
-        pg_insert(Account)
-        .values(
-            provider_id=provider.id,
-            email=payload.email or f"unknown@{payload.org_id}",
+@router.post("/sync", response_model=SyncResponse, dependencies=[Depends(verify_api_key)])
+async def sync_usage(payload: SyncPayload, db: Session = Depends(get_sync_db)):
+    account = db.query(Account).filter(Account.org_id == payload.org_id).first()
+    if not account:
+        account = Account(
+            provider=payload.provider,
+            email=payload.email,
             org_id=payload.org_id,
-            subscription_tier=payload.subscription_tier,
-            last_seen_at=utcnow(),
+            subscription_tier=payload.subscription_tier
         )
-        .on_conflict_do_update(
-            constraint="uq_provider_email",
-            set_={
-                "org_id":            payload.org_id,
-                "subscription_tier": payload.subscription_tier,
-                "last_seen_at":      utcnow(),
-            }
-        )
-        .returning(Account.id, Account.created_at)
+        db.add(account)
+        db.flush()
+    else:
+        account.email = payload.email or account.email
+        account.subscription_tier = payload.subscription_tier or account.subscription_tier
+        account.updated_at = datetime.utcnow()
+
+    limits_dict = {
+        "session": payload.limits.session.model_dump() if payload.limits.session else None,
+        "weekly": payload.limits.weekly.model_dump() if payload.limits.weekly else None,
+        "sonnet_weekly": payload.limits.sonnet_weekly.model_dump() if payload.limits.sonnet_weekly else None,
+        "opus_weekly": payload.limits.opus_weekly.model_dump() if payload.limits.opus_weekly else None,
+    }
+
+    sync_event = SyncEvent(
+        account_id=account.id,
+        email=payload.email,
+        org_id=payload.org_id,
+        subscription_tier=payload.subscription_tier,
+        limits=limits_dict,
+        timestamp=payload.timestamp
     )
-    result  = await db.execute(stmt)
-    row     = result.fetchone()
-    account_id = row.id
-    created    = row.created_at > (utcnow().replace(second=0, microsecond=0))  # rough heuristic
+    db.add(sync_event)
+    db.commit()
+    db.refresh(account)
+    return {"account_id": account.id}
 
-    # 3. Upsert current_usage + append snapshots
-    for limit_type, limit_data in (payload.limits or {}).items():
-        if limit_data is None:
-            continue
-
-        # current_usage upsert
-        cu_stmt = (
-            pg_insert(CurrentUsage)
-            .values(
-                account_id=account_id,
-                limit_type=limit_type,
-                usage_pct=limit_data.usage_pct,
-                resets_at=limit_data.resets_at,
-                updated_at=utcnow(),
-            )
-            .on_conflict_do_update(
-                index_elements=["account_id", "limit_type"],
-                set_={
-                    "usage_pct":  limit_data.usage_pct,
-                    "resets_at":  limit_data.resets_at,
-                    "updated_at": utcnow(),
-                }
-            )
-        )
-        await db.execute(cu_stmt)
-
-        # snapshot append
-        db.add(UsageSnapshot(
-            account_id=account_id,
-            limit_type=limit_type,
-            usage_pct=limit_data.usage_pct or 0.0,
-            resets_at=limit_data.resets_at,
-            source="extension",
-        ))
-
-    await db.commit()
-    return SyncResponse(account_id=account_id, created=created)
+@router.get("/sync/{org_id}", response_model=list[SyncEventOut], dependencies=[Depends(verify_api_key)])
+async def get_sync_history(org_id: str, limit: int = 50, db: Session = Depends(get_sync_db)):
+    events = db.query(SyncEvent).filter(SyncEvent.org_id == org_id).order_by(SyncEvent.timestamp.desc()).limit(limit).all()
+    return events
