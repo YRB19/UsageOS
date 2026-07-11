@@ -1,114 +1,88 @@
-from __future__ import annotations
-import uuid
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
+from uuid import UUID
 
-
-# ── Sync (extension → server) ─────────────────────────────────────────────────
-
-class LimitPayload(BaseModel):
+class LimitSchema(BaseModel):
     usage_pct: Optional[float] = None
     resets_at: Optional[datetime] = None
 
-class SyncRequest(BaseModel):
-    provider:          str = "claude"
-    email:             Optional[str] = None
-    org_id:            Optional[str] = None
+class LimitsSchema(BaseModel):
+    session: Optional[LimitSchema] = None
+    weekly: Optional[LimitSchema] = None
+    sonnet_weekly: Optional[LimitSchema] = None
+    opus_weekly: Optional[LimitSchema] = None
+
+class SyncPayload(BaseModel):
+    provider: str
+    email: Optional[str] = None
+    org_id: str
     subscription_tier: Optional[str] = None
-    limits: dict[str, Optional[LimitPayload]] = Field(default_factory=dict)
-    timestamp:         Optional[datetime] = None
+    limits: LimitsSchema
+    timestamp: datetime
 
 class SyncResponse(BaseModel):
-    account_id: uuid.UUID
-    created:    bool
+    account_id: UUID
+    model_config = ConfigDict(from_attributes=True)
 
+class SyncEventOut(BaseModel):
+    id: UUID
+    org_id: str
+    email: Optional[str] = None
+    subscription_tier: Optional[str] = None
+    limits: LimitsSchema
+    timestamp: datetime
+    model_config = ConfigDict(from_attributes=True)
 
-# ── Account ───────────────────────────────────────────────────────────────────
-
-class CurrentUsageOut(BaseModel):
-    limit_type: str
-    usage_pct:  Optional[float]
-    resets_at:  Optional[datetime]
-    updated_at: datetime
+class HealthResponse(BaseModel):
+    status: str = "ok"
     model_config = ConfigDict(from_attributes=True)
 
 class AccountOut(BaseModel):
-    id:                uuid.UUID
-    email:             str
-    org_id:            Optional[str]
-    nickname:          Optional[str]
-    project_name:      Optional[str]
-    color:             str
-    subscription_tier: Optional[str]
-    is_active:         bool
-    created_at:        datetime
-    last_seen_at:      Optional[datetime]
-    current_usage:     list[CurrentUsageOut] = []
-    note:              Optional[str] = None
-    # Notification preferences
-    notify_telegram:   bool = False
-    telegram_chat_id:  Optional[str] = None
-    notify_whatsapp:   bool = False
-    whatsapp_number:   Optional[str] = None
-    notify_reset:      bool = True
-    notify_threshold:  Optional[float] = None
+    id: UUID
+    provider: str
+    email: Optional[str] = None
+    org_id: str
+    nickname: Optional[str] = None
+    color: str
+    telegram_chat_id: Optional[str] = None
+    subscription_tier: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class AccountWithUsage(BaseModel):
+    id: UUID
+    provider: str
+    email: Optional[str] = None
+    org_id: str
+    nickname: Optional[str] = None
+    color: str
+    telegram_chat_id: Optional[str] = None
+    subscription_tier: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime
+    limits: list[dict] = []
     model_config = ConfigDict(from_attributes=True)
 
 class AccountPatch(BaseModel):
-    nickname:          Optional[str] = None
-    project_name:      Optional[str] = None
-    color:             Optional[str] = None
-    is_active:         Optional[bool] = None
-    notify_telegram:   Optional[bool] = None
-    telegram_chat_id:  Optional[str] = None
-    notify_whatsapp:   Optional[bool] = None
-    whatsapp_number:   Optional[str] = None
-    notify_reset:      Optional[bool] = None
-    notify_threshold:  Optional[float] = None
+    nickname: Optional[str] = None
+    color: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
 
+class SettingIn(BaseModel):
+    key: str
+    value: str
 
-# ── Notes ─────────────────────────────────────────────────────────────────────
-
-class NoteOut(BaseModel):
-    content:    str
-    updated_at: datetime
+class SettingOut(BaseModel):
+    key: str
+    value: str
     model_config = ConfigDict(from_attributes=True)
 
-class NotePut(BaseModel):
+class NoteIn(BaseModel):
     content: str
 
-
-# ── History ───────────────────────────────────────────────────────────────────
-
-class SnapshotOut(BaseModel):
-    recorded_at: datetime
-    usage_pct:   float
-    resets_at:   Optional[datetime]
+class NoteOut(BaseModel):
+    content: str
+    updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
-
-
-# ── Dashboard ─────────────────────────────────────────────────────────────────
-
-class DashboardAccount(BaseModel):
-    id:                uuid.UUID
-    email:             str
-    nickname:          Optional[str]
-    project_name:      Optional[str]
-    color:             str
-    subscription_tier: Optional[str]
-    last_seen_at:      Optional[datetime]
-    current_usage:     dict[str, Optional[CurrentUsageOut]]
-    note:              str
-    model_config = ConfigDict(from_attributes=True)
-
-class DashboardResponse(BaseModel):
-    accounts: list[DashboardAccount]
-
-
-# ── Health ────────────────────────────────────────────────────────────────────
-
-class HealthResponse(BaseModel):
-    status:   str
-    db:       str
-    accounts: int
