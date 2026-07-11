@@ -1,12 +1,12 @@
 import './lib/browser-polyfill.min.js';
 import './lib/o200k_base.js';
-import { CONFIG, isElectron, sleep, RawLog, FORCE_DEBUG, containerFetch, addContainerFetchListener, StoredMap, getStorageValue, setStorageValue, removeStorageValue, getOrgStorageKey, sendTabMessage, messageRegistry } from './bg-components/utils.js';
+import { CONFIG, isElectron, sleep, RawLog, FORCE_DEBUG, StoredMap, getStorageValue, setStorageValue, removeStorageValue, getOrgStorageKey, sendTabMessage, messageRegistry } from './bg-components/utils.js';
+import { atlasSync, AtlasSync } from './bg-components/atlasSync.js';
 import { tokenStorageManager, tokenCounter } from './bg-components/tokenManagement.js';
-import { ClaudeAPI, ConversationAPI } from './bg-components/claude-api.js';
+import { getStrategy, initContainerStrategy, setBrave } from './bg-components/container-strategy.js';
 import { UsageData } from './shared/dataclasses.js';
 import { translate, normalizeLocale } from './shared/localization.js';
 import { scheduleAlarm, getAlarm, createNotification } from './bg-components/electron-compat.js';
-import { atlasSync } from './bg-components/atlasSync.js';
 
 const INTERCEPT_PATTERNS = {
 	onBeforeRequest: {
@@ -65,17 +65,6 @@ browser.runtime.onMessage.addListener(async (message, sender) => {
 	return runOnceInitialized(handleMessageFromContent, [message, sender]);
 });
 
-// Keyboard shortcuts
-browser.commands?.onCommand.addListener(async (command) => {
-	if (command === 'open-dashboard') {
-		browser.tabs.create({ url: browser.runtime.getURL('dashboard.html') });
-	} else if (command === 'open-popup') {
-		// Can't programmatically open popup in MV3, but we can open dashboard
-		// as alternative, or show a notification
-		browser.tabs.create({ url: browser.runtime.getURL('dashboard.html') });
-	}
-});
-
 
 
 
@@ -123,7 +112,7 @@ if (!isElectron) {
 		["responseHeaders"]
 	);
 
-	addContainerFetchListener();
+	initContainerStrategy();
 }
 
 //Alarm listeners
@@ -167,7 +156,7 @@ async function checkResetNotifications() {
 
 			const tab = tabs[0];
 			const tabOrgId = await requestActiveOrgId(tab);
-			const api = new ClaudeAPI(tab.cookieStoreId, tabOrgId);
+			const api = getStrategy().apiForTab(tab, tabOrgId);
 			const usageData = await api.getUsageData();
 
 			// Only notify if session usage is at 0% (user hasn't started chatting again)
@@ -233,18 +222,6 @@ async function logError(error) {
 	await Log("error", JSON.stringify(error.stack));
 }
 
-// Get account email from content script (page context has correct cookies)
-async function getAccountEmailFromContent(tabId) {
-	try {
-		const response = await sendTabMessage(tabId, {
-			action: "getAccountEmail"
-		});
-		return response?.email || null;
-	} catch (error) {
-		await Log("warn", "Error getting email from content script:", error);
-		return null;
-	}
-}
 
 //#endregion
 
@@ -253,45 +230,8 @@ async function requestActiveOrgId(tab) {
 	if (typeof tab === "number") {
 		tab = await browser.tabs.get(tab);
 	}
-	if (chrome.cookies) {
-		try {
-			const cookie = await browser.cookies.get({
-				name: 'lastActiveOrg',
-				url: tab.url,
-				storeId: tab.cookieStoreId
-			});
-
-			if (cookie?.value) {
-				return cookie.value;
-			}
-		} catch (error) {
-			await Log("error", "Error getting cookie directly:", error);
-		}
-	}
-
-
-	try {
-		const response = await sendTabMessage(tab.id, {
-			action: "getOrgID"
-		});
-		return response?.orgId;
-	} catch (error) {
-		await Log("error", "Error getting org ID from content script:", error);
-		return null;
-	}
-}
-
-// Get account email from content script (page context has correct cookies)
-async function getAccountEmailFromContent(tabId) {
-	try {
-		const response = await sendTabMessage(tabId, {
-			action: "getAccountEmail"
-		});
-		return response?.email || null;
-	} catch (error) {
-		await Log("warn", "Error getting email from content script:", error);
-		return null;
-	}
+	// The active strategy knows how to read the active org for this platform's container model.
+	return getStrategy().activeOrgForTab(tab);
 }
 
 //#endregion
@@ -310,7 +250,7 @@ async function updateAllTabsWithUsage(usageData = null) {
 		// If no usageData provided, fetch fresh
 		if (!data) {
 			const orgId = await requestActiveOrgId(tab);
-			const api = new ClaudeAPI(tab.cookieStoreId, orgId);
+			const api = getStrategy().apiForTab(tab, orgId);
 			data = await api.getUsageData();
 		}
 
@@ -341,7 +281,7 @@ async function updateTabWithConversationData(tabId, conversationData) {
 messageRegistry.register('getConfig', () => CONFIG);
 messageRegistry.register('getAccountLocale', async (message, sender) => {
 	try {
-		return await new ClaudeAPI(sender.tab?.cookieStoreId, null).getAccountLocale();
+		return await getStrategy().apiForTab(sender.tab, null).getAccountLocale();
 	} catch (error) {
 		await Log("warn", "Failed to fetch account locale:", error);
 		return null;
@@ -370,56 +310,27 @@ messageRegistry.register('setAPIKey', async (message) => {
 	}
 });
 
-messageRegistry.register('getResetNotifEnabled', () => getStorageValue('resetNotifEnabled', false));
-messageRegistry.register('setResetNotifEnabled', (message) => setStorageValue('resetNotifEnabled', message.value));
-
-// Notification settings
-messageRegistry.register('getNotificationSettings', async () => ({
-	telegram_enabled: await getStorageValue('telegramEnabled', false),
-	telegram_chat_id: await getStorageValue('telegramChatId', ''),
-	whatsapp_enabled: await getStorageValue('whatsappEnabled', false),
-	whatsapp_number: await getStorageValue('whatsappNumber', ''),
-	notify_threshold: await getStorageValue('notifyThreshold', 0.9),
-	notify_reset: await getStorageValue('resetNotifEnabled', false),
-}));
-
-messageRegistry.register('setNotificationSettings', async (message) => {
-	if (message.telegram_enabled !== undefined) await setStorageValue('telegramEnabled', message.telegram_enabled);
-	if (message.telegram_chat_id !== undefined) await setStorageValue('telegramChatId', message.telegram_chat_id);
-	if (message.whatsapp_enabled !== undefined) await setStorageValue('whatsappEnabled', message.whatsapp_enabled);
-	if (message.whatsapp_number !== undefined) await setStorageValue('whatsappNumber', message.whatsapp_number);
-	if (message.notify_threshold !== undefined) await setStorageValue('notifyThreshold', message.notify_threshold);
-	if (message.notify_reset !== undefined) await setStorageValue('resetNotifEnabled', message.notify_reset);
+messageRegistry.register('atlasSaveSettings', async (message) => {
+	await AtlasSync.saveSettings(message.url, message.apiKey);
+	await atlasSync.init(true);
 	return true;
 });
 
-messageRegistry.register('testNotification', async (message, sender) => {
-	// For options page, we test by sending to the account's configured channels
-	// This is a simple test - in production you'd want to use the backend
-	const { channel, chatId, number } = message;
-	
-	// Try to send via the extension's background (requires backend)
-	// For now, we'll just return success to indicate the settings are saved
-	// The actual test would go through the backend API
-	if (channel === 'telegram') {
-		const chatId = await getStorageValue('telegramChatId', '');
-		if (!chatId) return { success: false, error: 'No Telegram Chat ID configured' };
-		// Could call backend test endpoint here
-		return { success: true, message: 'Telegram test queued' };
-	}
-	if (channel === 'whatsapp') {
-		const number = await getStorageValue('whatsappNumber', '');
-		if (!number) return { success: false, error: 'No WhatsApp number configured' };
-		return { success: true, message: 'WhatsApp test queued' };
-	}
-	return { success: false, error: 'Unknown channel' };
-});
+messageRegistry.register('getResetNotifEnabled', () => getStorageValue('resetNotifEnabled', false));
+messageRegistry.register('setResetNotifEnabled', (message) => setStorageValue('resetNotifEnabled', message.value));
 
 messageRegistry.register('getLanguageOverride', () => getStorageValue('languageOverride', null));
 messageRegistry.register('setLanguageOverride', (message) => setStorageValue('languageOverride', message.value));
 
 messageRegistry.register('isElectron', () => isElectron);
 messageRegistry.register('getMonkeypatchPatterns', () => isElectron ? INTERCEPT_PATTERNS : false);
+
+// The content script reports whether we're on Brave (navigator.brave.isBrave()). On Brave we can't
+// read per-container cookies, so claude.ai fetches are proxied through the originating tab instead.
+messageRegistry.register('reportBrave', async (message) => {
+	await setBrave(message.isBrave);
+	return true;
+});
 
 async function openDebugPage() {
 	if (!isElectron) {
@@ -430,11 +341,97 @@ async function openDebugPage() {
 }
 messageRegistry.register(openDebugPage);
 
+messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
+
+// Per-account notes & nicknames (synced via browser.storage.sync for cross-device)
+async function getAccountNote(message) {
+	const { orgId } = message;
+	if (!orgId) return '';
+	try {
+		const result = await browser.storage.sync.get(`accountNote_${orgId}`);
+		return result[`accountNote_${orgId}`] || '';
+	} catch (error) {
+		return await getStorageValue(`accountNote_${orgId}`, '');
+	}
+}
+messageRegistry.register(getAccountNote);
+
+async function setAccountNote(message) {
+	const { orgId, note } = message;
+	if (!orgId) return false;
+	try {
+		await browser.storage.sync.set({ [`accountNote_${orgId}`]: note });
+	} catch (error) {
+		await setStorageValue(`accountNote_${orgId}`, note);
+	}
+	return true;
+}
+messageRegistry.register(setAccountNote);
+
+async function getAccountNickname(message) {
+	const { orgId } = message;
+	if (!orgId) return '';
+	try {
+		const result = await browser.storage.sync.get(`accountNickname_${orgId}`);
+		return result[`accountNickname_${orgId}`] || '';
+	} catch (error) {
+		return await getStorageValue(`accountNickname_${orgId}`, '');
+	}
+}
+messageRegistry.register(getAccountNickname);
+
+async function setAccountNickname(message) {
+	const { orgId, nickname } = message;
+	if (!orgId) return false;
+	try {
+		await browser.storage.sync.set({ [`accountNickname_${orgId}`]: nickname });
+	} catch (error) {
+		await setStorageValue(`accountNickname_${orgId}`, nickname);
+	}
+	return true;
+}
+messageRegistry.register(setAccountNickname);
+
+// Stores the DOM-extracted email, keyed by orgId, so getAccountEmail() can use it
+// as a fallback when the API doesn't return one.
+async function setDomExtractedEmail(message, sender) {
+	const { email } = message;
+	if (!email) return false;
+
+	// We need to associate this email with the correct orgId. The sender tab's
+	// cookieStoreId tells us which container we're in. Get the orgId from that container.
+	try {
+		const cookieStoreId = sender?.tab?.cookieStoreId;
+		if (!cookieStoreId) {
+			await Log("warn", "setDomExtractedEmail: no cookieStoreId on sender tab");
+			return false;
+		}
+
+		// Read the lastActiveOrg cookie from that specific cookie store
+		const cookie = await browser.cookies.get({
+			name: 'lastActiveOrg',
+			url: 'https://claude.ai',
+			storeId: cookieStoreId
+		});
+		if (!cookie?.value) {
+			await Log("warn", "setDomExtractedEmail: no lastActiveOrg cookie found for storeId", cookieStoreId);
+			return false;
+		}
+		const orgId = cookie.value;
+		await setStorageValue(`domEmail_${orgId}`, email);
+		await Log(`setDomExtractedEmail: cached email for orgId ${orgId}`);
+	} catch (error) {
+		await Log("warn", "setDomExtractedEmail: failed to associate with orgId:", error);
+	}
+	return true;
+}
+messageRegistry.register(setDomExtractedEmail);
+
 // Complex handlers
 async function requestData(message, sender, orgId) {
 	const { conversationId } = message;
 
-	const api = new ClaudeAPI(sender.tab?.cookieStoreId, orgId);
+	const api = getStrategy().apiForTab(sender.tab, orgId);
 
 	// Always fetch and send fresh usage data
 	const usageData = await api.getUsageData();
@@ -481,136 +478,26 @@ async function requestData(message, sender, orgId) {
 messageRegistry.register(requestData);
 
 async function getPopupUsageData() {
-	const orgMap = new Map(); // orgId -> cookieStoreId
+	// The active strategy owns discovery: it returns [{ orgId, ctx }] for this platform's container model.
+	const accounts = await getStrategy().listAccounts();
+	if (accounts.length === 0) return [];
 
-	const storeIds = new Set();
-	try {
-		if (browser.contextualIdentities) {
-			storeIds.add('firefox-default');
-			const containers = await browser.contextualIdentities.query({});
-			for (const c of containers) storeIds.add(c.cookieStoreId);
-		} else {
-			const stores = await browser.cookies.getAllCookieStores();
-			for (const s of stores) storeIds.add(s.id);
-		}
-	} catch (e) {
-		await Log("warn", "Cookie store enumeration failed, falling back to getAllCookieStores:", e);
+	// Each account resolves to a success or a structured error (never rejects), so error entries keep
+	// their orgId and a cached name for the popup to render as an "unavailable" row.
+	return Promise.all(accounts.map(async ({ orgId, ctx }) => {
+		const api = getStrategy().apiFor(ctx, orgId);
 		try {
-			const stores = await browser.cookies.getAllCookieStores();
-			for (const s of stores) storeIds.add(s.id);
-		} catch (e2) {
-			await Log("warn", "getAllCookieStores also failed:", e2);
-		}
-	}
-
-	await Log("Checking cookie stores for org IDs:", [...storeIds]);
-	for (const storeId of storeIds) {
-		try {
-			const cookie = await browser.cookies.get({
-				name: 'lastActiveOrg',
-				url: 'https://claude.ai',
-				storeId
-			});
-			if (cookie?.value && !orgMap.has(cookie.value)) {
-				orgMap.set(cookie.value, storeId);
-			}
-		} catch (e) {
-			await Log("warn", `Failed to check cookies for store ${storeId}:`, e);
-		}
-	}
-
-	// Fallback: check stored orgIds if no cookies found
-	if (orgMap.size === 0) {
-		await tokenStorageManager.ensureOrgIds();
-		for (const orgId of tokenStorageManager.orgIds) {
-			orgMap.set(orgId, null);
-		}
-	}
-
-	if (orgMap.size === 0) return [];
-
-	const results = await Promise.allSettled(
-		Array.from(orgMap.entries()).map(async ([orgId, cookieStoreId]) => {
-			const api = new ClaudeAPI(cookieStoreId, orgId);
 			const usageData = await api.getUsageData();
 			const org = await api.getOrgInfo(); // cache hit — getUsageData already fetched it
-				.getOrgInfo();
-			let email = null;
-			if (sender?.tab?.id) {
-				email = await getAccountEmailFromContent(sender.tab.id);
-			}
-			if (!email) {
-				email = await api.getAccountEmail();
-			}
-			return {
-				orgId,
-				orgName: org?.name || null,
-				cookieStoreId,
-				email,
-				usageData: usageData.toJSON()
-			};
-		})
-	);
-
-	return results.map(r =>
-		r.status === 'fulfilled' ? r.value : { orgId: r.reason?.orgId, error: String(r.reason) }
-	);
+			const email = await api.getAccountEmail();
+			return { orgId, orgName: org?.name || null, usageData: usageData.toJSON(), email };
+		} catch (e) {
+			const org = await api.getOrgInfo().catch(() => null); // cached name if available
+			return { orgId, orgName: org?.name || null, error: String(e) };
+		}
+	}));
 }
 messageRegistry.register(getPopupUsageData);
-
-// Notes are stored per-account (keyed by orgId) and synced via browser.storage.sync so
-// they follow the user across Chrome installs signed into the same Google account.
-async function getAccountNote(message) {
-	const { orgId } = message;
-	if (!orgId) return '';
-	try {
-		const result = await browser.storage.sync.get(`accountNote_${orgId}`);
-		return result[`accountNote_${orgId}`] || '';
-	} catch (error) {
-		// storage.sync can be unavailable (e.g. some Firefox/Electron setups) — fall back to local
-		const fallback = await getStorageValue(`accountNote_${orgId}`, '');
-		return fallback;
-	}
-}
-messageRegistry.register(getAccountNote);
-
-async function setAccountNote(message) {
-	const { orgId, note } = message;
-	if (!orgId) return false;
-	try {
-		await browser.storage.sync.set({ [`accountNote_${orgId}`]: note });
-	} catch (error) {
-		await setStorageValue(`accountNote_${orgId}`, note);
-	}
-	return true;
-}
-messageRegistry.register(setAccountNote);
-
-// Lightweight per-account display name/nickname, also synced, so accounts can be labeled
-// beyond just their email (e.g. "Work", "Alt", "Personal").
-async function getAccountNickname(message) {
-	const { orgId } = message;
-	if (!orgId) return '';
-	try {
-		const result = await browser.storage.sync.get(`accountNickname_${orgId}`);
-		return result[`accountNickname_${orgId}`] || '';
-	} catch (error) {
-		return await getStorageValue(`accountNickname_${orgId}`, '');
-	}
-}
-messageRegistry.register(getAccountNickname);
-
-async function setAccountNickname(message) {
-	const { orgId, nickname } = message;
-	if (!orgId) return false;
-	try {
-		await browser.storage.sync.set({ [`accountNickname_${orgId}`]: nickname });
-	} catch (error) {
-		await setStorageValue(`accountNickname_${orgId}`, nickname);
-	}
-	return true;
-}
-messageRegistry.register(setAccountNickname);
 
 async function interceptedRequest(message, sender) {
 	await Log("Got intercepted request, are we in electron?", isElectron);
@@ -679,7 +566,7 @@ async function parseRequestBody(requestBody) {
 
 async function processResponse(orgId, conversationId, responseKey, details) {
 	const tabId = details.tabId;
-	const api = new ClaudeAPI(details.cookieStoreId, orgId);
+	const api = getStrategy().apiForRequest(details, orgId);
 	await Log("Processing response...");
 
 	const pendingRequest = await pendingRequests.get(responseKey);
@@ -700,21 +587,8 @@ async function processResponse(orgId, conversationId, responseKey, details) {
 
 	// Add modifier costs to conversation data
 	let modifierCost = 0;
-	let profileTokens = 0;
-	try {
-		profileTokens = await api.getProfileTokens();
-	} catch (e) {
-		await Log("warn", "getProfileTokens failed, skipping:", e.message);
-	}
+	const profileTokens = await api.getProfileTokens();
 	modifierCost += profileTokens;
-
-	let styleTokens = 0;
-	try {
-		styleTokens = await api.getStyleTokens(pendingRequest?.styleId, tabId);
-	} catch (e) {
-		await Log("warn", "getStyleTokens failed (tab not ready), skipping:", e.message);
-	}
-	modifierCost += styleTokens;
 
 	if (pendingRequest?.toolDefinitions) {
 		let toolTokens = 0;
@@ -760,12 +634,12 @@ async function processResponse(orgId, conversationId, responseKey, details) {
 	await updateAllTabsWithUsage(usageData);
 	await updateTabWithConversationData(tabId, conversationData);
 
-	// Sync to ATLAS (non-blocking — failures are queued)
+	// Sync usage to Atlas backend (non-blocking)
 	try {
-		const email = await getAccountEmailFromContent(tabId);
+		const email = await api.getAccountEmail();
 		atlasSync.sync(orgId, email, usageData).catch(() => {});
 	} catch (err) {
-		await Log('warn', 'ATLAS sync error in processResponse:', err);
+		await Log('warn', 'ATLAS sync error:', err);
 	}
 
 	await conversationCache.set(conversationId, conversationData.toJSON(), CONVERSATION_CACHE_TTL);
@@ -780,7 +654,8 @@ async function debugLogMessageCost(usageData, conversationData) {
 		session: 'debug_session',
 		weekly: 'debug_weekly',
 		sonnetWeekly: 'debug_sonnet_weekly',
-		opusWeekly: 'debug_opus_weekly'
+		opusWeekly: 'debug_opus_weekly',
+		fableWeekly: 'debug_fable_weekly'
 	};
 
 	for (const [limitKey, storagePrefix] of Object.entries(limitMapping)) {
@@ -902,8 +777,6 @@ async function onBeforeRequestHandler(details) {
 
 		const key = `${orgId}:${conversationId}`;
 		await Log(`Message sent - Key: ${key}`);
-		const styleId = requestBodyJSON?.personalized_styles?.[0]?.key || requestBodyJSON?.personalized_styles?.[0]?.uuid
-		await Log("Choosing style between:", requestBodyJSON?.personalized_styles?.[0]?.key, requestBodyJSON?.personalized_styles?.[0]?.uuid)
 
 		// Process tool definitions if present
 		const toolDefs = requestBodyJSON?.tools?.filter(tool =>
@@ -918,7 +791,7 @@ async function onBeforeRequestHandler(details) {
 		// Fetch current usage to snapshot before message
 		let previousUsage = null;
 		try {
-			const api = new ClaudeAPI(details.cookieStoreId, orgId);
+			const api = getStrategy().apiForRequest(details, orgId);
 			const usageData = await api.getUsageData();
 			previousUsage = usageData.toJSON();
 		} catch (error) {
@@ -931,7 +804,6 @@ async function onBeforeRequestHandler(details) {
 			orgId: orgId,
 			conversationId: conversationId,
 			tabId: details.tabId,
-			styleId: styleId,
 			model: model,
 			modelVersion: requestBodyJSON?.model || CONFIG.DEFAULT_MODEL_VERSION,
 			requestTimestamp: Date.now(),
@@ -963,7 +835,7 @@ async function onBeforeRequestHandler(details) {
 	if (details.method === "GET" && details.url.includes("/settings/billing")) {
 		await Log("Hit the billing page, let's make sure we get the updated subscription tier in case it was changed...")
 		const orgId = await requestActiveOrgId(details.tabId);
-		const api = new ClaudeAPI(details.cookieStoreId, orgId);
+		const api = getStrategy().apiForRequest(details, orgId);
 		await api.getSubscriptionTier(true);
 	}
 
@@ -1019,7 +891,7 @@ async function onCompletedHandler(details) {
 				await conversationCache.delete(conversationId);
 				await Log("Branch switch detected — fetching fresh data for:", conversationId);
 
-				const api = new ClaudeAPI(details.cookieStoreId, orgId);
+				const api = getStrategy().apiForRequest(details, orgId);
 				const conversation = await api.getConversation(conversationId);
 				const conversationData = await conversation.getInfo(false);
 				const profileTokens = await api.getProfileTokens();
@@ -1043,7 +915,7 @@ async function onCompletedHandler(details) {
 			const orgId = await requestActiveOrgId(details.tabId);
 			if (!orgId) return;
 			await tokenStorageManager.addOrgId(orgId);
-			const api = new ClaudeAPI(details.cookieStoreId, orgId);
+			const api = getStrategy().apiForRequest(details, orgId);
 			const usageData = await api.getUsageData();
 			await updateAllTabsWithUsage(usageData);
 			await scheduleResetNotifications(orgId, usageData);
@@ -1112,25 +984,13 @@ getAlarm('checkResetNotifications').then(existing => {
 	}
 });
 
-// ATLAS: expose test-connection to options page
-messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
-
-// ATLAS: when the options page saves settings, force the background's
-// atlasSync singleton to drop its cached config so the next sync() reads
-// the freshly-stored URL/key. Without this, a service worker that was
-// warm before the user saved would keep `_ready=true` with stale (often
-// empty) `_baseUrl/_apiKey`, and sync() would silently bail as
-// "not_configured".
-messageRegistry.register('atlasRefreshSettings', () => atlasSync.init(true));
-
 isInitialized = true;
 for (const handler of functionsPendingUntilInitialization) {
 	handler.fn(...handler.args);
 }
 functionsPendingUntilInitialization = [];
-Log("Done initializing.");
+Log("Done initializing.")
 
-// Flush any payloads queued while the server was unreachable
 atlasSync.flushOnStartup().catch(() => {});
 
 if (isElectron) {
