@@ -41,6 +41,38 @@ browser.storage.local.get('force_debug').then(result => {
 // Global variables that will be shared across all content scripts
 let CONFIG;
 
+// Debug logs are buffered in memory and flushed on a short debounce so logging (which happens inside
+// the per-frame update loop) never blocks on storage. Up to ~1s of logs can be lost on navigation.
+let pendingLogEntries = [];
+let logFlushScheduled = false;
+
+function scheduleLogFlush() {
+	if (logFlushScheduled) return;
+	logFlushScheduled = true;
+	setTimeout(flushLogs, 1000);
+}
+
+async function flushLogs() {
+	logFlushScheduled = false;
+	if (pendingLogEntries.length === 0) return;
+	const batch = pendingLogEntries;
+	pendingLogEntries = [];
+	// Read fresh and append so we don't clobber logs written by other contexts (background / other tabs).
+	try {
+		const result = await browser.storage.local.get('debug_logs');
+		const logs = result.debug_logs || [];
+		logs.push(...batch);
+		while (logs.length > 1000) logs.shift();
+		await browser.storage.local.set({ debug_logs: logs });
+	} catch (e) {
+		try {
+			await browser.storage.local.set({ debug_logs: batch.slice(-100) });
+		} catch (e2) {
+			// Give up — never let logging throw.
+		}
+	}
+}
+
 // Logging function
 async function Log(...args) {
 	const sender = `content:${document.title.substring(0, 20)}${document.title.length > 20 ? '...' : ''}`;
@@ -51,17 +83,14 @@ async function Log(...args) {
 		level = args.shift();
 	}
 
-	const result = await browser.storage.local.get('debug_mode_until');
-	const debugUntil = result.debug_mode_until;
-	const now = Date.now();
-
-	if ((!debugUntil || debugUntil <= now) && !FORCE_DEBUG) {
-		return;
+	// Gate: when FORCE_DEBUG is off, only log within the debug window. When on, skip the storage read.
+	if (!FORCE_DEBUG) {
+		const result = await browser.storage.local.get('debug_mode_until');
+		const debugUntil = result.debug_mode_until;
+		if (!debugUntil || debugUntil <= Date.now()) return;
 	}
 
-	if (level === "debug") {
-		console.log("[UsageTracker]", ...args);
-	} else if (level === "warn") {
+	if (level === "warn") {
 		console.warn("[UsageTracker]", ...args);
 	} else if (level === "error") {
 		console.error("[UsageTracker]", ...args);
@@ -77,35 +106,33 @@ async function Log(...args) {
 		fractionalSecondDigits: 3
 	});
 
-	const logEntry = {
-		timestamp: timestamp,
-		sender: sender,
-		level: level,
-		message: args.map(arg => {
-			if (arg instanceof Error) {
-				return arg.stack || `${arg.name}: ${arg.message}`;
+	let message = args.map(arg => {
+		if (arg instanceof Error) {
+			return arg.stack || `${arg.name}: ${arg.message}`;
+		}
+		if (typeof arg === 'object') {
+			// Handle null case
+			if (arg === null) return 'null';
+			// For other objects, try to stringify with error handling
+			try {
+				return JSON.stringify(arg, Object.getOwnPropertyNames(arg), 2);
+			} catch (e) {
+				return String(arg);
 			}
-			if (typeof arg === 'object') {
-				// Handle null case
-				if (arg === null) return 'null';
-				// For other objects, try to stringify with error handling
-				try {
-					return JSON.stringify(arg, Object.getOwnPropertyNames(arg), 2);
-				} catch (e) {
-					return String(arg);
-				}
-			}
-			return String(arg);
-		}).join(' ')
-	};
+		}
+		return String(arg);
+	}).join(' ');
 
-	const logsResult = await browser.storage.local.get('debug_logs');
-	const logs = logsResult.debug_logs || [];
-	logs.push(logEntry);
+	// Cap per-entry size so a large payload can't bloat storage past quota.
+	const MAX_LOG_MESSAGE = 2000;
+	if (message.length > MAX_LOG_MESSAGE) {
+		message = message.slice(0, MAX_LOG_MESSAGE) + `…[truncated ${message.length - MAX_LOG_MESSAGE} chars]`;
+	}
 
-	if (logs.length > 1000) logs.shift();
-
-	await browser.storage.local.set({ debug_logs: logs });
+	// Buffer + debounced flush — no awaited storage I/O in the caller's path.
+	pendingLogEntries.push({ timestamp, sender, level, message });
+	if (pendingLogEntries.length > 1000) pendingLogEntries.shift();
+	scheduleLogFlush();
 }
 
 async function logError(error) {
@@ -169,6 +196,29 @@ async function sendBackgroundMessage(message) {
 		counter--;
 	}
 	throw new Error("Failed to send message to background script after 10 retries.");
+}
+
+// Encode bytes as base64 (chunked to avoid stack overflow on large file downloads). Used to ship
+// proxyFetch response bodies back to the background, which rebuilds a Response from them.
+function bytesToBase64(buffer) {
+	const bytes = new Uint8Array(buffer);
+	let binary = '';
+	const chunk = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunk) {
+		binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+	}
+	return btoa(binary);
+}
+
+// Brave hides containers from extension APIs, so the background can't read this container's cookies.
+// Tell it whether we're on Brave; if so, it proxies claude.ai fetches back through this tab.
+async function reportBraveStatus() {
+	try {
+		const isBrave = !!(navigator.brave && typeof navigator.brave.isBrave === 'function' && await navigator.brave.isBrave());
+		await sendBackgroundMessage({ type: 'reportBrave', isBrave });
+	} catch (e) {
+		await Log("warn", "Brave detection failed:", e);
+	}
 }
 
 async function waitForElement(target, selector, maxTime = 1000) {
@@ -293,6 +343,35 @@ function getResetTimeHTML(timeInfo) {
 	return `${prefix} <span style="color: ${BLUE_HIGHLIGHT}">${timeString}</span>`;
 }
 
+// Tooltips use the CDS color vars (--cds-tooltip-bg/-fg), which are scoped to .cds-root.
+// Append them into a dedicated portal so the vars resolve outside claude.ai's own roots.
+let _tooltipPortal = null;
+function getTooltipPortal() {
+	if (_tooltipPortal && _tooltipPortal.isConnected) return _tooltipPortal;
+
+	const existing = document.querySelector('.cds-root[data-cds-portal]');
+	if (existing) {
+		_tooltipPortal = existing;
+		return _tooltipPortal;
+	}
+
+	const reference = document.querySelector('.cds-root');
+	const portal = document.createElement('div');
+	portal.className = 'cds-root pointer-events-none';
+	portal.setAttribute('data-cds-portal', '');
+
+	if (reference) {
+		for (const attr of ['data-density', 'data-mode', 'data-platform', 'data-font']) {
+			const val = reference.getAttribute(attr);
+			if (val) portal.setAttribute(attr, val);
+		}
+	}
+
+	document.body.appendChild(portal);
+	_tooltipPortal = portal;
+	return _tooltipPortal;
+}
+
 function setupTooltip(element, tooltip, options = {}) {
 	if (!element || !tooltip) return;
 
@@ -403,11 +482,11 @@ class ProgressBar {
 		this.bar.style.background = BLUE_HIGHLIGHT;
 
 		this.tooltip = document.createElement('div');
-		this.tooltip.className = 'bg-bg-500 text-text-000 ut-tooltip';
+		this.tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip';
 
 		this.track.appendChild(this.bar);
 		this.container.appendChild(this.track);
-		document.body.appendChild(this.tooltip);
+		getTooltipPortal().appendChild(this.tooltip);
 		setupTooltip(this.container, this.tooltip, { topOffset: 10 });
 	}
 
@@ -428,8 +507,8 @@ class ProgressBar {
 			this.container.appendChild(this.marker);
 
 			this.markerTooltip = document.createElement('div');
-			this.markerTooltip.className = 'bg-bg-500 text-text-000 ut-tooltip';
-			document.body.appendChild(this.markerTooltip);
+			this.markerTooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip';
+			getTooltipPortal().appendChild(this.markerTooltip);
 			setupTooltip(this.marker, this.markerTooltip);
 		}
 		this.marker.style.left = `${Math.min(percentage, 100)}%`;
@@ -454,40 +533,15 @@ browser.runtime.onMessage.addListener(async (message) => {
 	if (message.action === "getOrgID") {
 		return Promise.resolve({ orgId: getActiveOrgId() });
 	}
-	if (message.action === "getStyleId") {
-		const storedStyle = localStorage.getItem('LSS-claude_personalized_style');
-		let styleId;
-		if (storedStyle) {
-			try {
-				const styleData = JSON.parse(storedStyle);
-				if (styleData) styleId = styleData.styleKey;
-			} catch (e) {
-				await Log("error", 'Failed to parse stored style:', e);
-			}
-		}
-		return Promise.resolve({ styleId });
-	}
-	if (message.action === "getAccountEmail") {
+	if (message.type === 'proxyFetch') {
+		// Brave: perform a fetch in this tab's container context and ship the result to the background.
 		try {
-			const response = await fetch('/api/account_profile', {
-				credentials: 'include'
-			});
-			const data = await response.json();
-			// Broaden field lookup — add more after seeing diagnostic log
-			const email = data?.email_address 
-				|| data?.email 
-				|| data?.user?.email 
-				|| data?.account?.email 
-				|| data?.emailAddress 
-				|| null;
-			
-			if (!email) {
-				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", data);
-			}
-			return Promise.resolve({ email });
+			const r = await fetch(message.url, { ...(message.options || {}), credentials: 'include' });
+			const buf = await r.arrayBuffer();
+			return { ok: r.ok, status: r.status, statusText: r.statusText, body: bytesToBase64(buf) };
 		} catch (e) {
-			await Log("warn", "Content script failed to fetch account email:", e);
-			return Promise.resolve({ email: null });
+			await Log("error", "proxyFetch failed:", message.url, e);
+			return { ok: false, status: 0, statusText: String(e), body: '' };
 		}
 	}
 });
@@ -506,6 +560,26 @@ async function injectStyles() {
 		await Log("error", 'Failed to load tracker styles:', error);
 	}
 }
+
+// Extract the account email from visible page text and send it to the background for caching.
+// More reliable than internal API guessing — Claude renders the email in the sidebar
+// footer regardless of scroll position, so innerText picks it up even when not visible.
+function extractAndStoreAccountEmail() {
+	try {
+		const matches = document.body.innerText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
+		if (matches && matches.length > 0) {
+			// Filter out obvious non-account emails (e.g. "noreply@anthropic.com")
+			const email = matches.find(e => !e.startsWith('noreply@') && !e.startsWith('no-reply@') && !e.startsWith('support@')) || matches[0];
+			sendBackgroundMessage({ type: 'setDomExtractedEmail', email });
+		}
+	} catch (error) {
+		// Silent — best-effort enhancement, not critical path
+	}
+}
+
+// Run on load and again after a short delay (sidebar may render after initial paint)
+extractAndStoreAccountEmail();
+setTimeout(extractAndStoreAccountEmail, 3000);
 
 // ========== PAGE LAYOUTS ==========
 // Centralized layout detection and anchor resolution.
@@ -809,6 +883,10 @@ async function initExtension() {
 	}
 	window.claudeTrackerInstance = true;
 
+	// Report Brave status before any ClaudeAPI-backed call (e.g. getAccountLocale below) so the
+	// background knows to proxy claude.ai fetches through this tab's container.
+	await reportBraveStatus();
+
 	// Clean up any leftover UI elements from a previous instance (e.g. extension toggled off/on)
 	document.querySelectorAll('[class^="ut-"], [class*=" ut-"]').forEach(el => el.remove());
 	const oldStyles = document.getElementById('ut-styles');
@@ -882,3 +960,23 @@ async function initExtension() {
 		await Log("error", 'Failed to initialize Chat Token Counter:', error);
 	}
 })();
+
+// Extract the account email from visible page text and cache it in extension storage.
+// More reliable than internal API guessing — Claude renders the email in the sidebar
+// footer regardless of scroll position, so innerText picks it up even when not visible.
+function extractAndStoreAccountEmail() {
+	try {
+		const matches = document.body.innerText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
+		if (matches && matches.length > 0) {
+			// Filter out obvious non-account emails if multiple matches exist (rare, but be safe)
+			const email = matches[0];
+			sendBackgroundMessage({ type: 'setDomExtractedEmail', email });
+		}
+	} catch (error) {
+		// Silent — this is a best-effort enhancement, not critical path
+	}
+}
+
+// Run on load and again after a short delay (sidebar may render after initial paint)
+extractAndStoreAccountEmail();
+setTimeout(extractAndStoreAccountEmail, 3000);

@@ -1,5 +1,5 @@
 /* global CONFIG, Log, ProgressBar, sendBackgroundMessage, getActiveOrgId,
-   setupTooltip, getResetTimeHTML, sleep, isMobileView, isCodePage, UsageData, isPeakHours,
+   setupTooltip, getTooltipPortal, getResetTimeHTML, sleep, isMobileView, isCodePage, UsageData, isPeakHours,
    RED_WARNING, BLUE_HIGHLIGHT, SUCCESS_GREEN, SELECTORS, LayoutManager, mountToAnchor,
    localize, fmtNum, localeForIntl */
 'use strict';
@@ -66,6 +66,7 @@ class UsageSection {
 			weekly: 'usage.label_weekly',
 			sonnetWeekly: 'usage.label_sonnet_weekly',
 			opusWeekly: 'usage.label_opus_weekly',
+			fableWeekly: 'usage.label_fable_weekly',
 			extraUsage: 'usage.label_extra'
 		};
 		return labelKeys[limitKey] ? localize(labelKeys[limitKey]) : limitKey;
@@ -431,12 +432,12 @@ class UsageUI {
 	createTooltips() {
 		const create = (text) => {
 			const tooltip = document.createElement('div');
-			tooltip.className = 'bg-bg-500 text-text-000 ut-tooltip font-normal font-ui';
+			tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip font-normal font-ui';
 			tooltip.textContent = text;
 			tooltip.style.maxWidth = '400px';
 			tooltip.style.textAlign = 'left';
 			tooltip.style.whiteSpace = 'pre-line';
-			document.body.appendChild(tooltip);
+			getTooltipPortal().appendChild(tooltip);
 			return tooltip;
 		};
 
@@ -549,7 +550,7 @@ class UsageUI {
 			const modelName = modelSelector?.textContent?.trim() || null;
 			const weeklyLimit = usageData.getBindingWeeklyLimit(modelName);
 			if (weeklyLimit) {
-				const markerKeys = { weekly: 'usage.marker_all', sonnetWeekly: 'usage.marker_sonnet', opusWeekly: 'usage.marker_opus' };
+				const markerKeys = { weekly: 'usage.marker_all', sonnetWeekly: 'usage.marker_sonnet', opusWeekly: 'usage.marker_opus', fableWeekly: 'usage.marker_fable' };
 				const markerName = markerKeys[weeklyLimit.key] ? localize(markerKeys[weeklyLimit.key]) : localize('usage.marker_fallback');
 				const markerLabel = `${markerName}: ${weeklyLimit.percentage.toFixed(0)}%`;
 				progressBar.setMarker(weeklyLimit.percentage, markerLabel);
