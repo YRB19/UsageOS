@@ -1,68 +1,102 @@
-import uuid
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session
+from datetime import datetime
+from app.database import get_sync_db
+from app.models import Account, SyncEvent, AccountNote
+from app.schemas import AccountOut, AccountPatch, NoteOut, NoteIn, SyncEventOut, AccountWithUsage
 
-from ..auth import require_api_key
-from ..database import get_db
-from ..models import Account
-from ..schemas import AccountOut, AccountPatch, CurrentUsageOut
+router = APIRouter()
 
-router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
 
-def _serialize(account: Account) -> AccountOut:
-    return AccountOut(
-        id=account.id,
-        email=account.email,
-        org_id=account.org_id,
-        nickname=account.nickname,
-        project_name=account.project_name,
-        color=account.color,
-        subscription_tier=account.subscription_tier,
-        is_active=account.is_active,
-        created_at=account.created_at,
-        last_seen_at=account.last_seen_at,
-        current_usage=[CurrentUsageOut.model_validate(cu) for cu in account.current_usage],
-        note=account.note.content if account.note else None,
+def _latest_limits_for(db: Session, account_id: str) -> list[dict]:
+    latest = (
+        db.query(SyncEvent)
+        .filter(SyncEvent.account_id == account_id)
+        .order_by(SyncEvent.timestamp.desc())
+        .first()
     )
+    if not latest or not latest.limits:
+        return []
 
-@router.get("", response_model=list[AccountOut], dependencies=[Depends(require_api_key)])
-async def list_accounts(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Account)
-        .where(Account.is_active == True)
-        .options(selectinload(Account.current_usage), selectinload(Account.note))
-        .order_by(Account.last_seen_at.desc().nulls_last())
-    )
-    return [_serialize(a) for a in result.scalars().all()]
+    result = []
+    for limit_type, data in latest.limits.items():
+        if data is None:
+            continue
+        result.append({
+            "limit_type": limit_type,
+            "usage_pct": data.get("usage_pct"),
+            "resets_at": data.get("resets_at"),
+            "updated_at": latest.timestamp.isoformat() if latest.timestamp else None,
+        })
+    return result
 
-@router.get("/{account_id}", response_model=AccountOut, dependencies=[Depends(require_api_key)])
-async def get_account(account_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Account)
-        .where(Account.id == account_id)
-        .options(selectinload(Account.current_usage), selectinload(Account.note))
-    )
-    account = result.scalar_one_or_none()
+
+@router.get("", response_model=list[AccountWithUsage])
+async def list_accounts(db: Session = Depends(get_sync_db)):
+    accounts = db.query(Account).order_by(Account.created_at.desc()).all()
+    result = []
+    for a in accounts:
+        note = db.query(AccountNote).filter(AccountNote.account_id == a.id).first()
+        result.append({
+            **{c.name: getattr(a, c.name) for c in a.__table__.columns},
+            "limits": _latest_limits_for(db, a.id),
+            "note": note.content if note else "",
+        })
+    return result
+
+
+@router.get("/{account_id}", response_model=AccountOut)
+async def get_account(account_id: str, db: Session = Depends(get_sync_db)):
+    account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    return _serialize(account)
+    return account
 
-@router.patch("/{account_id}", response_model=AccountOut, dependencies=[Depends(require_api_key)])
-async def patch_account(account_id: uuid.UUID, body: AccountPatch, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Account)
-        .where(Account.id == account_id)
-        .options(selectinload(Account.current_usage), selectinload(Account.note))
-    )
-    account = result.scalar_one_or_none()
+
+@router.patch("/{account_id}", response_model=AccountOut)
+async def update_account(account_id: str, patch: AccountPatch, db: Session = Depends(get_sync_db)):
+    account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    if patch.nickname is not None:
+        account.nickname = patch.nickname
+    if patch.color is not None:
+        account.color = patch.color
+    if patch.telegram_chat_id is not None:
+        account.telegram_chat_id = patch.telegram_chat_id
+    db.commit()
+    db.refresh(account)
+    return account
 
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(account, field, value)
 
-    await db.commit()
-    await db.refresh(account)
-    return _serialize(account)
+@router.get("/{account_id}/sync-history", response_model=list[SyncEventOut])
+async def get_account_sync_history(account_id: str, limit: int = 50, db: Session = Depends(get_sync_db)):
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    events = db.query(SyncEvent).filter(SyncEvent.account_id == account_id).order_by(SyncEvent.timestamp.desc()).limit(limit).all()
+    return events
+
+
+@router.get("/{account_id}/note", response_model=NoteOut)
+async def get_note(account_id: str, db: Session = Depends(get_sync_db)):
+    note = db.query(AccountNote).filter(AccountNote.account_id == account_id).first()
+    if not note:
+        return {"content": "", "updated_at": datetime.utcnow()}
+    return note
+
+
+@router.put("/{account_id}/note", response_model=NoteOut)
+async def put_note(account_id: str, body: NoteIn, db: Session = Depends(get_sync_db)):
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    note = db.query(AccountNote).filter(AccountNote.account_id == account_id).first()
+    if not note:
+        note = AccountNote(account_id=account_id, content=body.content)
+        db.add(note)
+    else:
+        note.content = body.content
+    db.commit()
+    db.refresh(note)
+    return note
