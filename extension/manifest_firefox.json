@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Claude Usage Tracker",
-	"version": "5.3.2",
+	"version": "5.4.0",
 	"description": "Helps you track your claude.ai usage caps based on tokens sent.",
 	"author": "lugia19",
 	"browser_specific_settings": {
@@ -48,7 +48,8 @@
 		"*://claude.ai/*",
 		"https://raw.githubusercontent.com/*",
 		"https://github.com/*",
-		"https://api.anthropic.com/*"
+		"https://api.anthropic.com/*",
+		"https://usageos.rishit.online/*"
 	],
 	"web_accessible_resources": [
 		{
@@ -63,7 +64,11 @@
 				"injections/rate-limit-watcher.js",
 				"injections/webrequest-polyfill.js",
 				"qol-badge.png",
-				"rate-badge.png"
+				"rate-badge.png",
+				"options.html",
+				"options.js",
+				"dashboard.html",
+				"dashboard.js"
 			],
 			"matches": [
 				"<all_urls>"
@@ -79,5 +84,6 @@
 		"default_title": "Claude Usage Tracker",
 		"default_popup": "popup.html"
 	},
+	"options_page": "options.html",
 	"incognito": "not_allowed"
 }
