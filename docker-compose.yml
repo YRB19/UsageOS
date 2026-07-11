@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: usageos-postgres
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: CHANGE_ME_PASSWORD
+      POSTGRES_DB: atlas
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - atlas-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: usageos-backend
+    environment:
+      DATABASE_URL: postgresql://atlas:CHANGE_ME_PASSWORD@postgres:5432/atlas
+      ATLAS_API_KEY: REPLACE_WITH_YOUR_API_KEY
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - atlas-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: usageos-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - atlas-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  atlas-network:
+    external: true
