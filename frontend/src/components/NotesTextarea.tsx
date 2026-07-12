@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { putNote } from '../lib/api';
 
 interface NotesTextareaProps {
@@ -32,7 +33,9 @@ export function NotesTextarea({ accountId, initialContent }: NotesTextareaProps)
               if (mountedRef.current) setSaved(false);
             }, 1500);
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }, 600);
     },
     [accountId]
@@ -45,19 +48,27 @@ export function NotesTextarea({ accountId, initialContent }: NotesTextareaProps)
   };
 
   return (
-    <div className="relative">
+    <div className="relative group/note">
       <textarea
         value={content}
         onChange={handleChange}
-        placeholder="Notes..."
+        placeholder="Add a note..."
         rows={2}
-        className="w-full bg-transparent text-[13px] text-neutral-400 placeholder-neutral-700 resize-none outline-none border-none leading-relaxed"
+        className="w-full bg-transparent text-[12px] text-muted/70 placeholder-muted/25 resize-none outline-none leading-relaxed group-hover/note:text-muted/90 transition-colors duration-200"
       />
-      {saved && (
-        <span className="absolute bottom-1 right-0 text-[10px] text-neutral-600 animate-pulse">
-          Saved
-        </span>
-      )}
+      <AnimatePresence>
+        {saved && (
+          <motion.span
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="absolute bottom-1 right-0 text-[10px] text-accent-primary/50 font-medium"
+          >
+            Saved
+          </motion.span>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

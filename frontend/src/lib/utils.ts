@@ -17,9 +17,9 @@ export function formatResetTime(resetsAt: string | null): string {
 }
 
 export function pctColor(pct: number | null): string {
-  if (pct === null) return '#6b7280';
-  if (pct >= 100) return '#ef4444';
-  if (pct >= 80) return '#f59e0b';
+  if (pct === null) return '#a7a9be';
+  if (pct >= 100) return '#f25f4c';
+  if (pct >= 80) return '#ff8906';
   return '#22c55e';
 }
 
