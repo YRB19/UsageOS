@@ -155,6 +155,37 @@ class AtlasSync {
         }
     }
 
+    async getAccountHistory(orgId) {
+        await this.init();
+        if (!this.isConfigured()) return { ok: false, reason: 'not_configured' };
+
+        try {
+            // First, get all accounts to find the UUID for this orgId
+            const accounts = await this._get('/api/v1/accounts');
+            const account = accounts.find(a => a.org_id === orgId);
+            if (!account) {
+                return { ok: false, reason: 'account_not_found' };
+            }
+            // Fetch full history (limit=0 means all)
+            const history = await this._get(`/api/v1/accounts/${account.id}/sync-history?limit=0`);
+            return { ok: true, data: history };
+        } catch (err) {
+            return { ok: false, reason: err.message };
+        }
+    }
+
+    async getAllAccountsFromBackend() {
+        await this.init();
+        if (!this.isConfigured()) return { ok: false, reason: 'not_configured' };
+
+        try {
+            const accounts = await this._get('/api/v1/accounts');
+            return { ok: true, data: accounts };
+        } catch (err) {
+            return { ok: false, reason: err.message };
+        }
+    }
+
     async _enqueue(payload) {
         const queue = (await getStorageValue(OFFLINE_QUEUE_KEY, [])) || [];
         queue.push({ payload, queuedAt: Date.now() });
@@ -179,9 +210,8 @@ class AtlasSync {
     }
 }
 
-export { AtlasSync };
 export const atlasSync = new AtlasSync();
-
+export { AtlasSync };
 
 setInterval(async () => {
     await atlasSync.init();

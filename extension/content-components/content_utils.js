@@ -1,9 +1,9 @@
 /* global localize, fmtNum, normalizeLocale, setLocaleOverride */
 'use strict';
 
-// Constants
-const BLUE_HIGHLIGHT = "#2c84db";
-const RED_WARNING = "#de2929";
+// Constants (UsageOS palette)
+const BLUE_HIGHLIGHT = "#ff8906";
+const RED_WARNING = "#f25f4c";
 const SUCCESS_GREEN = "#22c55e";
 
 const SELECTORS = {
@@ -561,26 +561,6 @@ async function injectStyles() {
 	}
 }
 
-// Extract the account email from visible page text and send it to the background for caching.
-// More reliable than internal API guessing — Claude renders the email in the sidebar
-// footer regardless of scroll position, so innerText picks it up even when not visible.
-function extractAndStoreAccountEmail() {
-	try {
-		const matches = document.body.innerText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
-		if (matches && matches.length > 0) {
-			// Filter out obvious non-account emails (e.g. "noreply@anthropic.com")
-			const email = matches.find(e => !e.startsWith('noreply@') && !e.startsWith('no-reply@') && !e.startsWith('support@')) || matches[0];
-			sendBackgroundMessage({ type: 'setDomExtractedEmail', email });
-		}
-	} catch (error) {
-		// Silent — best-effort enhancement, not critical path
-	}
-}
-
-// Run on load and again after a short delay (sidebar may render after initial paint)
-extractAndStoreAccountEmail();
-setTimeout(extractAndStoreAccountEmail, 3000);
-
 // ========== PAGE LAYOUTS ==========
 // Centralized layout detection and anchor resolution.
 // Each layout has match() to detect the page and anchors to find DOM insertion points.
@@ -960,23 +940,3 @@ async function initExtension() {
 		await Log("error", 'Failed to initialize Chat Token Counter:', error);
 	}
 })();
-
-// Extract the account email from visible page text and cache it in extension storage.
-// More reliable than internal API guessing — Claude renders the email in the sidebar
-// footer regardless of scroll position, so innerText picks it up even when not visible.
-function extractAndStoreAccountEmail() {
-	try {
-		const matches = document.body.innerText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
-		if (matches && matches.length > 0) {
-			// Filter out obvious non-account emails if multiple matches exist (rare, but be safe)
-			const email = matches[0];
-			sendBackgroundMessage({ type: 'setDomExtractedEmail', email });
-		}
-	} catch (error) {
-		// Silent — this is a best-effort enhancement, not critical path
-	}
-}
-
-// Run on load and again after a short delay (sidebar may render after initial paint)
-extractAndStoreAccountEmail();
-setTimeout(extractAndStoreAccountEmail, 3000);
