@@ -40,19 +40,20 @@
 		"contextMenus",
 		"notifications"
 	],
-"host_permissions": [
-    "*://claude.ai/*",
-    "https://raw.githubusercontent.com/*",
-    "https://github.com/*",
-    "https://api.anthropic.com/*",
-    "https://usageos.rishit.online/*"
-  ],
+	"host_permissions": [
+		"*://claude.ai/*",
+		"https://raw.githubusercontent.com/*",
+		"https://github.com/*",
+		"https://api.anthropic.com/*",
+		"https://usageos.rishit.online/*"
+	],
 	"web_accessible_resources": [
 		{
 			"resources": [
 				"default-config.json",
 				"lib/browser-polyfill.min.js",
 				"lib/o200k_base.js",
+				"lib/chart.umd.min.js",
 				"kofi-button.png",
 				"debug.html",
 				"update_patchnotes.txt",
@@ -75,11 +76,14 @@
 		"512": "icon512.png",
 		"128": "icon128.png"
 	},
-"action": {
-    "default_icon": "icon128.png",
-    "default_title": "Claude Usage Tracker",
-    "default_popup": "popup.html"
-  },
-  "options_page": "options.html",
-  "incognito": "split"
+	"action": {
+		"default_icon": "icon128.png",
+		"default_title": "Claude Usage Tracker",
+		"default_popup": "popup.html"
+	},
+	"options_page": "options.html",
+	"incognito": "split",
+	"content_security_policy": {
+		"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+	}
 }

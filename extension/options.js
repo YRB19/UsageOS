@@ -22,10 +22,10 @@ function toggleKeyVisibility() {
 	const btn = document.getElementById('toggle-key');
 	if (input.type === 'password') {
 		input.type = 'text';
-		btn.textContent = '🙈';
+		btn.innerHTML = '&#128064;';
 	} else {
 		input.type = 'password';
-		btn.textContent = '👁';
+		btn.innerHTML = '&#128065;';
 	}
 }
 

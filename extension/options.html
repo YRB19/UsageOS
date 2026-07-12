@@ -2,63 +2,76 @@
 <html>
 <head>
 	<meta charset="utf-8">
-	<link rel="stylesheet" href="tracker-styles.css">
+	<title>UsageOS Settings</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 	<style>
 		:root {
-			--bg-primary: #1e1e1e;
-			--bg-secondary: #252526;
-			--text-primary: #d4d4d4;
-			--text-secondary: #9cdcfe;
-			--button-bg: #2d2d2d;
-			--button-hover: #3e3e3e;
-			--button-active: #505050;
-			--border-color: #454545;
-			--input-bg: #1e1e1e;
-			--input-border: #454545;
-			--input-focus: #2c84db;
+			--bg: #0f0e17;
+			--bg-card: rgba(31, 41, 55, 0.5);
+			--fg: #fffffe;
+			--muted: #a7a9be;
+			--border: rgba(55, 65, 81, 0.5);
+			--accent: #ff8906;
+			--highlight: #f25f4c;
+			--secondary: #e53170;
 		}
+
+		* { box-sizing: border-box; }
 
 		body {
 			margin: 0;
-			padding: 24px;
-			background-color: var(--bg-primary);
-			color: var(--text-primary);
-			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			padding: 0;
+			background: var(--bg);
+			color: var(--fg);
+			font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 			font-size: 14px;
 			line-height: 1.6;
 			min-width: 480px;
+			-webkit-font-smoothing: antialiased;
+		}
+
+		.page-header {
+			padding: 32px 32px 24px;
+			border-bottom: 1px solid var(--border);
 		}
 
 		h1 {
-			margin: 0 0 8px 0;
+			margin: 0 0 6px 0;
 			font-size: 22px;
 			font-weight: 600;
-			color: var(--text-primary);
+			color: var(--fg);
 		}
 
 		.subtitle {
-			margin: 0 0 24px 0;
-			color: var(--text-secondary);
+			margin: 0;
+			color: var(--muted);
 			font-size: 13px;
+			opacity: 0.7;
+		}
+
+		.content {
+			padding: 24px 32px;
 		}
 
 		.section {
-			margin-bottom: 24px;
-			padding-bottom: 24px;
-			border-bottom: 1px solid var(--border-color);
-		}
-
-		.section:last-child {
-			border-bottom: none;
-			margin-bottom: 0;
-			padding-bottom: 0;
+			margin-bottom: 28px;
+			padding: 20px;
+			background: var(--bg-card);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			border: 1px solid var(--border);
+			border-radius: 12px;
 		}
 
 		.section-title {
-			margin: 0 0 16px 0;
-			font-size: 14px;
+			margin: 0 0 18px 0;
+			font-size: 13px;
 			font-weight: 600;
-			color: var(--text-primary);
+			color: var(--fg);
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
 		}
 
 		.field {
@@ -72,85 +85,85 @@
 		label {
 			display: block;
 			margin-bottom: 6px;
-			font-size: 13px;
-			color: var(--text-secondary);
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--muted);
 		}
 
 		input[type="text"],
 		input[type="password"] {
 			width: 100%;
 			box-sizing: border-box;
-			padding: 10px 12px;
-			background: var(--input-bg);
-			border: 1px solid var(--input-border);
-			border-radius: 6px;
-			color: var(--text-primary);
+			padding: 10px 14px;
+			background: rgba(15, 14, 23, 0.5);
+			backdrop-filter: blur(4px);
+			-webkit-backdrop-filter: blur(4px);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			color: var(--fg);
 			font-size: 13px;
-			font-family: inherit;
+			font-family: 'Inter', sans-serif;
 			transition: border-color 0.2s, box-shadow 0.2s;
 		}
 
 		input[type="text"]:focus,
 		input[type="password"]:focus {
 			outline: none;
-			border-color: var(--input-focus);
-			box-shadow: 0 0 0 3px rgba(44, 132, 219, 0.2);
+			border-color: var(--accent);
+			box-shadow: 0 0 0 3px rgba(255, 137, 6, 0.15);
 		}
 
 		input::placeholder {
-			color: #666;
+			color: var(--muted);
+			opacity: 0.4;
 		}
 
 		.button-row {
 			display: flex;
-			gap: 12px;
-			margin-top: 24px;
-			padding-top: 16px;
-			border-top: 1px solid var(--border-color);
+			gap: 10px;
 		}
 
 		button {
 			padding: 10px 20px;
-			background: var(--button-bg);
-			color: var(--text-primary);
-			border: 1px solid var(--border-color);
-			border-radius: 6px;
+			background: var(--bg-card);
+			backdrop-filter: blur(8px);
+			color: var(--muted);
+			border: 1px solid var(--border);
+			border-radius: 8px;
 			cursor: pointer;
 			font-size: 13px;
 			font-weight: 500;
-			font-family: inherit;
-			transition: background-color 0.2s, transform 0.1s;
+			font-family: 'Inter', sans-serif;
+			transition: all 0.15s ease;
 		}
 
 		button:hover {
-			background: var(--button-hover);
+			background: rgba(31, 41, 55, 0.8);
+			color: var(--fg);
 		}
 
 		button:active {
-			background: var(--button-active);
-			transform: translateY(1px);
+			transform: scale(0.98);
 		}
 
 		button.primary {
-			background: #2c84db;
-			border-color: #2c84db;
-			color: white;
+			background: rgba(255, 137, 6, 0.15);
+			color: var(--accent);
+			border-color: rgba(255, 137, 6, 0.3);
 		}
 
 		button.primary:hover {
-			background: #3a93e8;
-		}
-
-		button.primary:active {
-			background: #2474c4;
+			background: rgba(255, 137, 6, 0.25);
+			color: var(--accent);
 		}
 
 		.status {
-			padding: 10px 12px;
-			border-radius: 6px;
+			padding: 10px 14px;
+			border-radius: 8px;
 			font-size: 13px;
-			margin-top: 12px;
+			margin-top: 14px;
 			display: none;
+			font-weight: 500;
 		}
 
 		.status.visible {
@@ -158,32 +171,33 @@
 		}
 
 		.status.info {
-			background: rgba(44, 132, 219, 0.15);
-			border: 1px solid rgba(44, 132, 219, 0.3);
-			color: #5db0f5;
+			background: rgba(255, 137, 6, 0.1);
+			border: 1px solid rgba(255, 137, 6, 0.2);
+			color: var(--accent);
 		}
 
 		.status.success {
-			background: rgba(34, 197, 94, 0.15);
-			border: 1px solid rgba(34, 197, 94, 0.3);
-			color: #4ade80;
+			background: rgba(34, 197, 94, 0.1);
+			border: 1px solid rgba(34, 197, 94, 0.2);
+			color: #22c55e;
 		}
 
 		.status.error {
-			background: rgba(222, 41, 41, 0.15);
-			border: 1px solid rgba(222, 41, 41, 0.3);
-			color: #f87171;
+			background: rgba(242, 95, 76, 0.1);
+			border: 1px solid rgba(242, 95, 76, 0.2);
+			color: var(--highlight);
 		}
 
 		.help-text {
-			margin-top: 8px;
-			font-size: 12px;
-			color: #888;
+			margin-top: 6px;
+			font-size: 11px;
+			color: var(--muted);
+			opacity: 0.5;
 			line-height: 1.5;
 		}
 
 		.help-text a {
-			color: #2c84db;
+			color: var(--accent);
 			text-decoration: none;
 		}
 
@@ -202,48 +216,71 @@
 			transform: translateY(-50%);
 			background: none;
 			border: none;
-			color: var(--text-secondary);
+			color: var(--muted);
 			cursor: pointer;
 			padding: 4px;
 			font-size: 14px;
 			line-height: 1;
+			opacity: 0.6;
+			transition: opacity 0.15s;
 		}
 
 		.password-toggle:hover {
-			color: var(--text-primary);
+			color: var(--fg);
+			opacity: 1;
+		}
+
+		.footer {
+			padding: 20px 32px;
+			border-top: 1px solid var(--border);
+			text-align: center;
+		}
+
+		.footer-text {
+			font-size: 11px;
+			color: var(--muted);
+			opacity: 0.3;
 		}
 	</style>
 </head>
 <body>
-	<h1>UsageOS Settings</h1>
-	<p class="subtitle">Configure your UsageOS backend connection to sync usage data across devices.</p>
-
-	<div class="section">
-		<h2 class="section-title">Server Connection</h2>
-
-		<div class="field">
-			<label for="server-url">Server URL</label>
-			<input type="text" id="server-url" placeholder="https://usageos.rishit.online" autocomplete="url">
-			<p class="help-text">Your UsageOS backend URL. Must use HTTPS.</p>
-		</div>
-
-		<div class="field">
-			<label for="api-key">API Key</label>
-			<div class="password-wrapper">
-				<input type="password" id="api-key" placeholder="sk_usageos_..." autocomplete="off">
-				<button type="button" class="password-toggle" id="toggle-key" aria-label="Show/hide API key">👁</button>
-			</div>
-			<p class="help-text">Get your API key from the UsageOS dashboard.</p>
-		</div>
-
-		<div class="status" id="status"></div>
+	<div class="page-header">
+		<h1>UsageOS Settings</h1>
+		<p class="subtitle">Configure your backend connection to sync usage data across devices.</p>
 	</div>
 
-	<div class="section">
-		<div class="button-row">
-			<button type="button" class="primary" id="save-btn">Save Settings</button>
-			<button type="button" id="test-btn">Test Connection</button>
+	<div class="content">
+		<div class="section">
+			<h2 class="section-title">Server Connection</h2>
+
+			<div class="field">
+				<label for="server-url">Server URL</label>
+				<input type="text" id="server-url" placeholder="https://usageos.rishit.online" autocomplete="url">
+				<p class="help-text">Your UsageOS backend URL. Must use HTTPS.</p>
+			</div>
+
+			<div class="field">
+				<label for="api-key">API Key</label>
+				<div class="password-wrapper">
+					<input type="password" id="api-key" placeholder="sk_usageos_..." autocomplete="off">
+					<button type="button" class="password-toggle" id="toggle-key" aria-label="Show/hide API key">&#128065;</button>
+				</div>
+				<p class="help-text">Get your API key from the UsageOS dashboard.</p>
+			</div>
+
+			<div class="status" id="status"></div>
 		</div>
+
+		<div class="section">
+			<div class="button-row">
+				<button type="button" class="primary" id="save-btn">Save Settings</button>
+				<button type="button" id="test-btn">Test Connection</button>
+			</div>
+		</div>
+	</div>
+
+	<div class="footer">
+		<p class="footer-text">UsageOS v1.0</p>
 	</div>
 
 	<script src="lib/browser-polyfill.min.js"></script>
