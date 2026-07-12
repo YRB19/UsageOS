@@ -121,63 +121,38 @@ class ClaudeAPI {
 	}
 
 	// Account email address, used to label/identify accounts in the multi-account dashboard.
-	// Cached per cookie store since it's identical across orgs within the same login session.
+	// Cached per account (orgId) since email is unique per account.
 	// IMPORTANT: only successful (non-null) results are cached — a failed/empty lookup must
 	// retry on the next call rather than locking in "unknown" for the cache TTL.
 	async getAccountEmail() {
 		const cacheKey = this.orgId || 'default';
 		const cached = await accountEmailCache.get(cacheKey);
-		if (cached) return cached;
+		if (cached) return cached;   // only short-circuit on a real cached email
 
-		// First check: DOM-extracted email cached by background from content script.
-		// This runs before any API calls and is the most reliable source for personal accounts.
-		try {
-			const { getStorageValue } = await import('./utils.js');
-			const domEmail = await getStorageValue(`domEmail_${this.orgId}`);
-			if (domEmail) {
-				await accountEmailCache.set(cacheKey, domEmail, 24 * 60 * 60 * 1000);
-				await Log(`getAccountEmail: using DOM-extracted email -> ${domEmail}`);
-				return domEmail;
-			}
-		} catch (error) {
-			await Log("warn", "getAccountEmail: domEmail lookup failed:", error);
-		}
-
-		// Primary attempt: /account_profile (confirmed via debug log this endpoint does NOT
-		// return an email field — kept here in case Anthropic adds one later).
 		try {
 			const profileData = await this.getRequest('/account_profile');
+
+			// Try every plausible field name/shape — log the raw shape if none match
+			// so we can see the real API response and correct this on the next pass.
 			const email =
 				profileData?.email_address ||
 				profileData?.email ||
 				profileData?.account?.email_address ||
 				profileData?.account?.email ||
+				profileData?.memberships?.[0]?.account?.email_address ||
 				null;
-			if (email) {
-				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
-				return email;
-			}
-		} catch (error) {
-			await Log("warn", "getAccountEmail: account_profile fetch failed:", error);
-		}
 
-		// Fallback: Claude auto-names personal-account orgs as "{email}'s Organization" —
-		// extract the email from that pattern via getOrgInfo(), which we already call elsewhere.
-		try {
-			const org = await this.getOrgInfo();
-			const match = org?.name?.match(/^(.+@.+)'s Organization$/i);
-			if (match) {
-				const email = match[1];
-				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
-				await Log(`getAccountEmail: recovered email from org name -> ${email}`);
-				return email;
+			if (!email) {
+				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", profileData);
+				return null;   // do NOT cache — retry next time
 			}
-			await Log("warn", "getAccountEmail: org name did not match expected pattern:", org?.name);
-		} catch (error) {
-			await Log("warn", "getAccountEmail: getOrgInfo fallback failed:", error);
-		}
 
-		return null;
+			await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+			return email;
+		} catch (error) {
+			await Log("warn", "Failed to fetch account email:", error);
+			return null;   // do NOT cache — retry next time
+		}
 	}
 
 	async getProfileTokens() {

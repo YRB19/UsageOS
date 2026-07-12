@@ -343,7 +343,17 @@ messageRegistry.register(openDebugPage);
 
 messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
 
-// Per-account notes & nicknames (synced via browser.storage.sync for cross-device)
+messageRegistry.register('getAccountHistory', async (message) => {
+	const { orgId } = message;
+	if (!orgId) return { ok: false, reason: 'missing_orgId' };
+	return atlasSync.getAccountHistory(orgId);
+});
+
+messageRegistry.register('getAllAccountsFromBackend', async () => {
+	return atlasSync.getAllAccountsFromBackend();
+});
+
+// Per-account notes & nicknames
 async function getAccountNote(message) {
 	const { orgId } = message;
 	if (!orgId) return '';
@@ -391,41 +401,6 @@ async function setAccountNickname(message) {
 	return true;
 }
 messageRegistry.register(setAccountNickname);
-
-// Stores the DOM-extracted email, keyed by orgId, so getAccountEmail() can use it
-// as a fallback when the API doesn't return one.
-async function setDomExtractedEmail(message, sender) {
-	const { email } = message;
-	if (!email) return false;
-
-	// We need to associate this email with the correct orgId. The sender tab's
-	// cookieStoreId tells us which container we're in. Get the orgId from that container.
-	try {
-		const cookieStoreId = sender?.tab?.cookieStoreId;
-		if (!cookieStoreId) {
-			await Log("warn", "setDomExtractedEmail: no cookieStoreId on sender tab");
-			return false;
-		}
-
-		// Read the lastActiveOrg cookie from that specific cookie store
-		const cookie = await browser.cookies.get({
-			name: 'lastActiveOrg',
-			url: 'https://claude.ai',
-			storeId: cookieStoreId
-		});
-		if (!cookie?.value) {
-			await Log("warn", "setDomExtractedEmail: no lastActiveOrg cookie found for storeId", cookieStoreId);
-			return false;
-		}
-		const orgId = cookie.value;
-		await setStorageValue(`domEmail_${orgId}`, email);
-		await Log(`setDomExtractedEmail: cached email for orgId ${orgId}`);
-	} catch (error) {
-		await Log("warn", "setDomExtractedEmail: failed to associate with orgId:", error);
-	}
-	return true;
-}
-messageRegistry.register(setDomExtractedEmail);
 
 // Complex handlers
 async function requestData(message, sender, orgId) {
