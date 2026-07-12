@@ -1,13 +1,11 @@
 /* global UsageData, isPeakHours, localize, setLocaleOverride */
 'use strict';
 let CONFIG;
-const BLUE_HIGHLIGHT = '#2c84db';
-const RED_WARNING = '#de2929';
-const SUCCESS_GREEN = '#22c55e';
+const GREEN = '#22c55e';
+const AMBER = '#ff8906';
+const RED = '#f25f4c';
+const MUTED = '#a7a9be';
 const WARNING_THRESHOLD = 0.9;
-
-// The popup's own document has no lang attribute, so localize() is pinned (via
-// setLocaleOverride) to the last page language persisted to storage by the content script.
 
 const LIMIT_LABEL_KEYS = {
 	session: 'usage.label_session',
@@ -18,27 +16,34 @@ const LIMIT_LABEL_KEYS = {
 	extraUsage: 'usage.label_extra'
 };
 
-function createProgressBar(percentage) {
-	const container = document.createElement('div');
-	container.className = 'ut-progress';
+function getPercentageClass(pct) {
+	if (pct >= 100) return 'red';
+	if (pct >= 80) return 'amber';
+	return 'green';
+}
 
+function getBarColor(pct) {
+	if (pct >= 100) return RED;
+	if (pct >= 80) return AMBER;
+	return GREEN;
+}
+
+function createProgressBar(percentage) {
 	const track = document.createElement('div');
-	track.className = 'ut-progress-track';
+	track.className = 'popup-progress-track';
 
 	const bar = document.createElement('div');
-	bar.className = 'ut-progress-bar';
+	bar.className = `popup-progress-bar ${getPercentageClass(percentage)}`;
 	bar.style.width = `${Math.min(percentage, 100)}%`;
-	bar.style.background = percentage >= WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
 
 	track.appendChild(bar);
-	container.appendChild(track);
-	return container;
+	return track;
 }
 
 function formatResetTime(timestamp) {
 	if (!timestamp) return '';
 	const diff = timestamp - Date.now();
-	if (diff <= 0) return `<span style="color: ${SUCCESS_GREEN}">${localize('common.resetting')}</span>`;
+	if (diff <= 0) return `<span style="color: ${GREEN}">${localize('common.resetting')}</span>`;
 
 	const hours = Math.floor(diff / (1000 * 60 * 60));
 	const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -54,37 +59,30 @@ function formatResetTime(timestamp) {
 
 function createLimitRow(key, limit) {
 	const row = document.createElement('div');
-	row.className = 'ut-limit-row ut-mb-2';
+	row.className = 'popup-limit-row';
 
 	const topLine = document.createElement('div');
-	topLine.className = 'ut-row ut-justify-between ut-mb-1 ut-select-none';
-	topLine.style.whiteSpace = 'nowrap';
+	topLine.className = 'popup-limit-top';
 
-	const leftSide = document.createElement('div');
-	leftSide.className = 'ut-row';
+	const label = document.createElement('span');
+	label.className = 'popup-limit-label';
+	label.textContent = LIMIT_LABEL_KEYS[key] ? localize(LIMIT_LABEL_KEYS[key]) : key;
 
-	const title = document.createElement('span');
-	title.style.cssText = 'font-size: 12px; min-width: 95px; display: inline-block;';
-	title.textContent = LIMIT_LABEL_KEYS[key] ? localize(LIMIT_LABEL_KEYS[key]) : key;
-
-	const percentage = document.createElement('span');
-	percentage.style.cssText = 'font-size: 12px; min-width: 30px;';
-	percentage.textContent = `${limit.percentage.toFixed(0)}%`;
-	percentage.style.color = limit.percentage >= WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
-
-	leftSide.appendChild(title);
-	leftSide.appendChild(percentage);
+	const pct = document.createElement('span');
+	pct.className = `popup-limit-pct ${getPercentageClass(limit.percentage)}`;
+	pct.textContent = `${limit.percentage.toFixed(0)}%`;
 
 	const resetTime = document.createElement('div');
-	resetTime.style.cssText = 'font-size: 11px; color: #888;';
+	resetTime.className = 'popup-limit-reset';
 	resetTime.dataset.resetsAt = limit.resetsAt || '';
 	resetTime.innerHTML = formatResetTime(limit.resetsAt);
 
-	topLine.appendChild(leftSide);
-	topLine.appendChild(resetTime);
+	topLine.appendChild(label);
+	topLine.appendChild(pct);
 
 	row.appendChild(topLine);
 	row.appendChild(createProgressBar(limit.percentage));
+	row.appendChild(resetTime);
 
 	return row;
 }
@@ -115,13 +113,11 @@ function renderOrgUsage(orgResult, showLabel) {
 		wrapper.appendChild(createLimitRow(limit.key, limit));
 	}
 
-	// Extra usage bar when any limit is maxed
 	const hasMaxedLimit = activeLimits.some(l => l.percentage >= 100);
 	if (hasMaxedLimit && usageData.hasExtraUsage()) {
 		const effectiveTotal = usageData.getExtraUsageEffectiveTotal();
 		const used = usageData.extraUsage.usedCredits;
 		const pct = effectiveTotal > 0 ? (used / effectiveTotal) * 100 : 0;
-
 		const row = createLimitRow('extraUsage', { percentage: pct, resetsAt: null });
 		wrapper.appendChild(row);
 	}
@@ -129,7 +125,6 @@ function renderOrgUsage(orgResult, showLabel) {
 	return wrapper;
 }
 
-// An org we know about but couldn't fetch usage for (e.g. a Brave container with no open tab).
 function renderOrgUnavailable(orgResult, showLabel, message) {
 	const wrapper = document.createElement('div');
 	wrapper.className = 'popup-org-section';
@@ -163,14 +158,11 @@ function applyStaticLocalization() {
 async function loadUsageData() {
 	const container = document.getElementById('usage-container');
 
-	// Resolve the locale from the last page language seen by the content script, then
-	// localize the static popup chrome.
 	const stored = await browser.storage.local.get('lastLang');
 	setLocaleOverride(stored.lastLang || 'en');
 	applyStaticLocalization();
 
 	try {
-		// Set CONFIG global so UsageData methods work (declared in ui_dataclasses.js)
 		CONFIG = await chrome.runtime.sendMessage({ type: 'getConfig' });
 		const results = await chrome.runtime.sendMessage({ type: 'getPopupUsageData' });
 
@@ -181,7 +173,6 @@ async function loadUsageData() {
 
 		container.innerHTML = '';
 		const showOrgLabels = results.length > 1;
-		// Wording for unreachable orgs depends on platform: on Brave it's a no-open-tab situation.
 		const { isBrave } = await browser.storage.local.get('isBrave');
 		const unavailableMsg = localize(isBrave ? 'popup.org_no_tab' : 'popup.org_unavailable');
 
@@ -191,7 +182,6 @@ async function loadUsageData() {
 				: renderOrgUsage(orgResult, showOrgLabels));
 		}
 
-		// Update reset countdowns every 30 seconds
 		setInterval(() => {
 			document.querySelectorAll('[data-resets-at]').forEach(el => {
 				const resetsAt = parseInt(el.dataset.resetsAt);

@@ -3,115 +3,230 @@
 
 <head>
 	<meta charset="utf-8">
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 	<link rel="stylesheet" href="tracker-styles.css">
 	<style>
 		:root {
-			--bg-primary: #1e1e1e;
-			--bg-secondary: #252526;
-			--text-primary: #d4d4d4;
-			--text-secondary: #9cdcfe;
-			--button-bg: #2d2d2d;
-			--button-hover: #3e3e3e;
-			--button-active: #505050;
-			--border-color: #454545;
+			--bg: #0f0e17;
+			--bg-card: rgba(31, 41, 55, 0.6);
+			--fg: #fffffe;
+			--muted: #a7a9be;
+			--border: rgba(55, 65, 81, 0.5);
+			--accent: #ff8906;
+			--highlight: #f25f4c;
+			--secondary: #e53170;
+			--green: #22c55e;
 		}
 
 		body {
-			width: 300px;
+			width: 320px;
 			margin: 0;
-			padding: 16px;
-			background-color: var(--bg-primary);
-			color: var(--text-primary);
-			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			padding: 0;
+			background: var(--bg);
+			color: var(--fg);
+			font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 			font-size: 13px;
 			line-height: 1.5;
+			-webkit-font-smoothing: antialiased;
 		}
 
-		p {
-			margin: 0 0 12px 0;
-		}
-
-		.button-container {
+		.popup-header {
 			display: flex;
-			gap: 8px;
+			align-items: center;
+			gap: 10px;
+			padding: 14px 16px 10px;
+			border-bottom: 1px solid var(--border);
 		}
 
-		button {
-			flex: 1;
-			background: var(--button-bg);
-			color: var(--text-primary);
-			border: 1px solid var(--border-color);
-			padding: 8px 12px;
-			border-radius: 4px;
-			cursor: pointer;
-			font-size: 13px;
-			transition: background-color 0.2s, transform 0.1s;
+		.popup-logo {
+			width: 28px;
+			height: 28px;
+			border-radius: 8px;
+			background: rgba(255, 137, 6, 0.12);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-size: 14px;
+			flex-shrink: 0;
 		}
 
-		button:hover {
-			background: var(--button-hover);
+		.popup-title {
+			font-size: 14px;
+			font-weight: 600;
+			color: var(--fg);
 		}
 
-		button:active {
-			background: var(--button-active);
-			transform: translateY(1px);
-		}
-
-		#donate {
-			background: #2c84db;
-			border-color: #2c84db;
-		}
-
-		#donate:hover {
-			background: #3a93e8;
-		}
-
-		#donate:active {
-			background: #2474c4;
+		.popup-subtitle {
+			font-size: 11px;
+			color: var(--muted);
+			opacity: 0.6;
 		}
 
 		#usage-container {
-			margin-bottom: 12px;
+			padding: 12px 16px;
 		}
 
-		.popup-loading, .popup-error, .popup-empty {
+		.popup-loading,
+		.popup-error,
+		.popup-empty {
 			font-size: 12px;
-			color: #888;
-			padding: 4px 0;
-		}
-
-		.popup-org-header {
-			font-size: 11px;
-			color: #888;
-			margin-bottom: 4px;
-			padding-bottom: 2px;
-			border-bottom: 1px solid var(--border-color);
+			color: var(--muted);
+			padding: 8px 0;
+			text-align: center;
 		}
 
 		.popup-org-section {
-			margin-bottom: 8px;
+			margin-bottom: 12px;
 		}
 
 		.popup-org-section:last-child {
 			margin-bottom: 0;
 		}
 
-		.ut-progress-track {
-			background: #333;
+		.popup-org-header {
+			font-size: 11px;
+			font-weight: 500;
+			color: var(--muted);
+			margin-bottom: 8px;
+			padding-bottom: 6px;
+			border-bottom: 1px solid var(--border);
+			opacity: 0.7;
+		}
+
+		.popup-limit-row {
+			margin-bottom: 10px;
+		}
+
+		.popup-limit-row:last-child {
+			margin-bottom: 0;
+		}
+
+		.popup-limit-top {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 4px;
+		}
+
+		.popup-limit-label {
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--muted);
+			min-width: 95px;
+		}
+
+		.popup-limit-pct {
+			font-size: 12px;
+			font-weight: 600;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.popup-limit-pct.green { color: var(--green); }
+		.popup-limit-pct.amber { color: var(--accent); }
+		.popup-limit-pct.red { color: var(--highlight); }
+
+		.popup-limit-reset {
+			font-size: 10px;
+			color: var(--muted);
+			opacity: 0.5;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.popup-progress-track {
+			height: 3px;
+			background: rgba(55, 65, 81, 0.5);
+			border-radius: 2px;
+			overflow: hidden;
+		}
+
+		.popup-progress-bar {
+			height: 100%;
+			border-radius: 2px;
+			transition: width 0.4s ease;
+		}
+
+		.popup-progress-bar.green { background: var(--green); }
+		.popup-progress-bar.amber { background: var(--accent); }
+		.popup-progress-bar.red { background: var(--highlight); }
+
+		.popup-footer {
+			display: flex;
+			gap: 6px;
+			padding: 10px 16px 14px;
+			border-top: 1px solid var(--border);
+		}
+
+		.popup-btn {
+			flex: 1;
+			background: var(--bg-card);
+			backdrop-filter: blur(8px);
+			color: var(--muted);
+			border: 1px solid var(--border);
+			padding: 7px 10px;
+			border-radius: 8px;
+			cursor: pointer;
+			font-size: 11px;
+			font-weight: 500;
+			font-family: 'Inter', sans-serif;
+			transition: all 0.15s ease;
+			text-align: center;
+		}
+
+		.popup-btn:hover {
+			background: rgba(31, 41, 55, 0.8);
+			color: var(--fg);
+			border-color: rgba(55, 65, 81, 0.8);
+		}
+
+		.popup-btn:active {
+			transform: scale(0.97);
+		}
+
+		.popup-btn.primary {
+			background: rgba(255, 137, 6, 0.12);
+			color: var(--accent);
+			border-color: rgba(255, 137, 6, 0.25);
+		}
+
+		.popup-btn.primary:hover {
+			background: rgba(255, 137, 6, 0.2);
+			color: var(--accent);
+		}
+
+		#popup-help {
+			font-size: 11px;
+			color: var(--muted);
+			opacity: 0.4;
+			padding: 0 16px 10px;
+			margin: 0;
+			line-height: 1.5;
 		}
 	</style>
 </head>
 
 <body>
+	<div class="popup-header">
+		<div class="popup-logo">&#9889;</div>
+		<div>
+			<div class="popup-title">UsageOS</div>
+			<div class="popup-subtitle">Claude usage tracker</div>
+		</div>
+	</div>
+
 	<div id="usage-container">
 		<div class="popup-loading">Loading usage data...</div>
 	</div>
-	<p id="popup-help">If you clicked here because you can't find the usage stats, try reloading the page or authorizing the extension to run on claude.ai &mdash; the usage stats are injected directly into the page.</p>
-	<div class="button-container">
-		<button id="debug">Debug Logs</button>
-		<button id="donate">Donate</button>
-		<button id="open-dashboard">Open Dashboard</button>
+
+	<p id="popup-help">If you can't find the usage stats, try reloading the page or authorizing the extension to run on claude.ai.</p>
+
+	<div class="popup-footer">
+		<button class="popup-btn" id="debug">Debug</button>
+		<button class="popup-btn" id="donate">Donate</button>
+		<button class="popup-btn primary" id="open-dashboard">Dashboard</button>
 	</div>
+
 	<script src="lib/browser-polyfill.min.js"></script>
 	<script src="content-components/localization.js"></script>
 	<script src="content-components/ui_dataclasses.js"></script>

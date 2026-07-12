@@ -1,20 +1,41 @@
-/* ui-styles.css */
+/* UsageOS Tracker Styles — in-page usage widget */
 
-/* Base Components */
+:root {
+	--uos-bg: #0f0e17;
+	--uos-card: rgba(31, 41, 55, 0.85);
+	--uos-fg: #fffffe;
+	--uos-muted: #a7a9be;
+	--uos-border: rgba(55, 65, 81, 0.5);
+	--uos-accent: #ff8906;
+	--uos-highlight: #f25f4c;
+	--uos-green: #22c55e;
+}
+
 .ut-card {
 	position: fixed;
-	border-radius: 8px;
-	padding: 12px;
+	border-radius: 12px;
+	padding: 14px;
 	font-size: 14px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+	background: var(--uos-card);
+	backdrop-filter: blur(16px);
+	-webkit-backdrop-filter: blur(16px);
+	border: 1px solid var(--uos-border);
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 	z-index: 99999;
 	user-select: none;
+	font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+	color: var(--uos-fg);
+	-webkit-font-smoothing: antialiased;
 }
 
 .ut-header {
 	padding: 8px;
-	margin: -12px -12px 8px -12px;
+	margin: -14px -14px 10px -14px;
 	cursor: move;
+	border-bottom: 1px solid var(--uos-border);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
 }
 
 .ut-container {
@@ -33,44 +54,69 @@
 	margin-bottom: 12px;
 }
 
-/* All inputs get the same treatment */
 .ut-input {
 	padding: 6px;
 	border-radius: 4px;
 	margin-bottom: 12px;
+	background: rgba(15, 14, 23, 0.5);
+	border: 1px solid var(--uos-border);
+	color: var(--uos-fg);
+	font-family: 'Inter', sans-serif;
+	font-size: 13px;
+	transition: border-color 0.15s;
 }
 
-/* All buttons get the same treatment */
+.ut-input:focus {
+	outline: none;
+	border-color: var(--uos-accent);
+}
+
 .ut-button {
 	border: none;
-	border-radius: 4px;
+	border-radius: 8px;
 	cursor: pointer;
 	padding: 6px 12px;
-	transition: all 300ms cubic-bezier(0.165, 0.85, 0.45, 1);
+	background: rgba(255, 137, 6, 0.12);
+	color: var(--uos-accent);
+	font-family: 'Inter', sans-serif;
+	font-size: 12px;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.ut-button:hover {
+	background: rgba(255, 137, 6, 0.2);
 }
 
 .ut-button:active {
-	transform: scale(0.95);
+	transform: scale(0.97);
 }
 
 .ut-button-icon {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	height: 32px;
-	width: 32px;
+	height: 28px;
+	width: 28px;
 	border-radius: 6px;
 	padding: 0;
+	background: rgba(255, 137, 6, 0.1);
+	color: var(--uos-accent);
+	border: none;
+	cursor: pointer;
+	transition: background 0.15s;
 }
 
-/* Close button is just positioned */
+.ut-button-icon:hover {
+	background: rgba(255, 137, 6, 0.2);
+}
+
 .ut-close {
 	position: absolute;
-	top: 0px;
+	top: 8px;
 	right: 8px;
 }
 
-/* Progress bars always the same */
 .ut-progress {
 	position: relative;
 	width: 100%;
@@ -78,24 +124,24 @@
 }
 
 .ut-progress-track {
-	height: 6px;
-	border-radius: 3px;
+	height: 3px;
+	border-radius: 2px;
 	overflow: hidden;
 	width: 100%;
+	background: rgba(55, 65, 81, 0.5);
 }
 
 .ut-progress-bar {
 	width: 0%;
 	height: 100%;
-	transition: width 0.3s ease, background-color 0.3s ease;
+	border-radius: 2px;
+	transition: width 0.5s ease, background-color 0.3s ease;
 }
-
 
 .ut-text-lg {
 	font-size: 14px;
 }
 
-/* Common utilities */
 .ut-label {
 	display: block;
 	margin-bottom: 8px;
@@ -104,153 +150,109 @@
 .ut-link {
 	text-decoration: underline;
 	cursor: pointer;
+	color: var(--uos-accent);
 }
 
 .ut-tooltip {
 	position: fixed;
-	padding: 4px 8px;
-	border-radius: 6px;
-	font-size: 13px;
+	padding: 6px 10px;
+	border-radius: 8px;
+	font-size: 12px;
 	line-height: 18px;
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+	background: var(--uos-card);
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+	border: 1px solid var(--uos-border);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	color: var(--uos-fg);
 	opacity: 0;
 	transition: opacity 0.2s;
 	pointer-events: none;
 	white-space: nowrap;
 	z-index: 9999;
 	user-select: none;
+	font-family: 'Inter', sans-serif;
 }
 
 .ut-tooltip-trigger {
-    -webkit-touch-callout: none; /* Disable callout on long press */
-    -webkit-user-select: none;   /* Disable text selection */
-    user-select: none;
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
 }
 
 .ut-content-box {
 	padding: 8px;
-	border-radius: 4px;
+	border-radius: 8px;
 	overflow-y: auto;
 }
 
-/* Spacing utilities */
-.ut-mb-0 {
-	margin-bottom: 0;
-}
+/* Spacing */
+.ut-mb-0 { margin-bottom: 0; }
+.ut-mb-1 { margin-bottom: 4px; }
+.ut-mb-2 { margin-bottom: 8px; }
+.ut-mb-3 { margin-bottom: 12px; }
 
-.ut-mb-1 {
-	margin-bottom: 4px;
-}
+/* Width */
+.ut-w-full { width: 100%; }
+.ut-w-auto { width: auto; }
 
-.ut-mb-2 {
-	margin-bottom: 8px;
-}
+/* Flex */
+.ut-flex-1 { flex: 1; }
+.ut-flex-grow { flex-grow: 1; }
+.ut-justify-between { justify-content: space-between; }
+.ut-justify-center { justify-content: center; }
+.ut-items-center { align-items: center; }
 
-.ut-mb-3 {
-	margin-bottom: 12px;
-}
+/* Text */
+.ut-text-left { text-align: left; }
+.ut-text-center { text-align: center; }
+.ut-text-right { text-align: right; }
 
-/* Width utilities */
-.ut-w-full {
-	width: 100%;
-}
+/* Display */
+.ut-block { display: block; }
+.ut-hidden { display: none; }
 
-.ut-w-auto {
-	width: auto;
-}
-
-/* Flex utilities */
-.ut-flex-1 {
-	flex: 1;
-}
-
-.ut-flex-grow {
-	flex-grow: 1;
-}
-
-.ut-justify-between {
-	justify-content: space-between;
-}
-
-.ut-justify-center {
-	justify-content: center;
-}
-
-.ut-items-center {
-	align-items: center;
-}
-
-/* Text alignment */
-.ut-text-left {
-	text-align: left;
-}
-
-.ut-text-center {
-	text-align: center;
-}
-
-.ut-text-right {
-	text-align: right;
-}
-
-/* Display utilities */
-.ut-block {
-	display: block;
-}
-
-.ut-hidden {
-	display: none;
-}
-
-/* Position utilities */
-.ut-sticky {
-	position: sticky;
-	top: 0;
-}
-
-.ut-relative {
-	position: relative;
-}
+/* Position */
+.ut-sticky { position: sticky; top: 0; }
+.ut-relative { position: relative; }
 
 /* Selection */
-.ut-select-none {
-	user-select: none;
-}
+.ut-select-none { user-select: none; }
+.ut-select-text { user-select: text; }
 
-.ut-select-text {
-	user-select: text;
-}
-
+/* Weekly marker */
 .ut-weekly-marker {
-    position: absolute;
-    bottom: 0;
-    height: 6px;
-    width: 3px;
-    background: var(--marker-color);
-    z-index: 2;
-    pointer-events: auto;
-    cursor: default;
+	position: absolute;
+	bottom: 0;
+	height: 3px;
+	width: 3px;
+	background: var(--marker-color);
+	z-index: 2;
+	pointer-events: auto;
+	cursor: default;
 }
 
 .ut-weekly-marker::before {
-    content: '';
-    position: absolute;
-    top: -8px;
-    left: 50%;
-    transform: translateX(-50%);
-    border-left: 5.5px solid transparent;
-    border-right: 5.5px solid transparent;
-    border-top: 8px solid var(--marker-color);
+	content: '';
+	position: absolute;
+	top: -8px;
+	left: 50%;
+	transform: translateX(-50%);
+	border-left: 5px solid transparent;
+	border-right: 5px solid transparent;
+	border-top: 7px solid var(--marker-color);
 }
 
+/* Desktop footer */
 .ut-desktop-footer {
-    font-size: 0.75rem;
-    color: var(--text-400);
-    border-top: 1px solid var(--border-400);
-    text-align: center;
+	font-size: 0.75rem;
+	color: var(--uos-muted);
+	opacity: 0.4;
+	border-top: 1px solid var(--uos-border);
+	text-align: center;
+	padding: 6px 0;
 }
 
 .ut-desktop-footer.ut-sidebar-footer {
-    text-align: left;
-    /*padding: 0 0.5rem 0.5rem 0.5rem;*/
+	text-align: left;
 }
