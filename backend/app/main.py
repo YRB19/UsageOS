@@ -10,6 +10,10 @@ from app.models import Account, SyncEvent, NotificationLog, AccountNote
 from sqlalchemy.exc import IntegrityError
 import asyncio
 from datetime import datetime, timezone, timedelta
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("uvicorn").setLevel(logging.INFO)
 
 Base.metadata.create_all(bind=sync_engine)
 
