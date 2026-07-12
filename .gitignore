@@ -17,3 +17,7 @@ postgres-data/
 .idea/
 
 .DS_Store
+
+
+extension-test-build.tar.gz
+extension-test-build.zip
