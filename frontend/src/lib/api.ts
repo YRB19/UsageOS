@@ -37,12 +37,3 @@ export async function getSyncHistory(accountId: string, limit = 50): Promise<Syn
   });
   return data || [];
 }
-
-export async function testConnection(): Promise<{ ok: boolean; data?: unknown }> {
-  try {
-    const { data } = await api.get('/v1/health');
-    return { ok: true, data };
-  } catch (error) {
-    return { ok: false, data: error };
-  }
-}

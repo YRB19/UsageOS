@@ -46,12 +46,12 @@ export const LIMIT_LABELS: Record<string, string> = {
 export const LIMIT_ORDER: string[] = ['session', 'weekly', 'sonnet_weekly', 'opus_weekly'];
 
 export const PRESET_COLORS = [
+  '#ff8906',
+  '#f25f4c',
+  '#e53170',
   '#6366f1',
   '#8b5cf6',
-  '#ec4899',
-  '#ef4444',
-  '#f97316',
-  '#eab308',
   '#22c55e',
   '#06b6d4',
+  '#eab308',
 ];
