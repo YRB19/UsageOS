@@ -74,7 +74,11 @@ async def get_account_sync_history(account_id: str, limit: int = 50, db: Session
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    events = db.query(SyncEvent).filter(SyncEvent.account_id == account_id).order_by(SyncEvent.timestamp.desc()).limit(limit).all()
+    
+    query = db.query(SyncEvent).filter(SyncEvent.account_id == account_id).order_by(SyncEvent.timestamp.asc())
+    if limit > 0:
+        query = query.limit(limit)
+    events = query.all()
     return events
 
 
