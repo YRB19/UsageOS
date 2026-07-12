@@ -21,3 +21,5 @@ postgres-data/
 
 extension-test-build.tar.gz
 extension-test-build.zip
+
+opencode.json
