@@ -14,6 +14,7 @@ class Account(Base):
     color = Column(String(7), nullable=False, default="#6366f1")
     telegram_chat_id = Column(String(64), nullable=True)
     subscription_tier = Column(String(64), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -50,8 +51,9 @@ class NotificationLog(Base):
     account_id = Column(PG_UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     limit_type = Column(String(64), nullable=False)
     resets_at = Column(DateTime(timezone=True), nullable=False)
+    notification_type = Column(String(20), nullable=False, default='pre_reset')  # 'pre_reset' or 'reset'
     notified_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        Index("ix_notification_log_account_limit", "account_id", "limit_type", "resets_at", unique=True),
+        Index("ix_notification_log_account_limit_type", "account_id", "limit_type", "resets_at", "notification_type", unique=True),
     )
