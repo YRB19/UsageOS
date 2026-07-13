@@ -4,7 +4,7 @@ services:
     container_name: usageos-postgres
     environment:
       POSTGRES_USER: atlas
-      POSTGRES_PASSWORD: CHANGE_ME_PASSWORD
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: atlas
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -25,8 +25,8 @@ services:
       dockerfile: Dockerfile
     container_name: usageos-backend
     environment:
-      DATABASE_URL: postgresql://atlas:CHANGE_ME_PASSWORD@postgres:5432/atlas
-      ATLAS_API_KEY: REPLACE_WITH_YOUR_API_KEY
+      DATABASE_URL: ${DATABASE_URL}
+      ATLAS_API_KEY: ${ATLAS_API_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
     volumes:
       - usageos_uploads:/app/uploads
@@ -44,7 +44,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_ATLAS_API_KEY: ${ATLAS_API_KEY}
+        VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: usageos-frontend
     ports:
       - "3000:80"

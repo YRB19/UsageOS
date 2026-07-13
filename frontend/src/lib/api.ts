@@ -2,7 +2,6 @@ import axios from 'axios';
 import type { AccountWithUsage, Account, SyncEvent, NoteResponse } from './types';
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
-const atlasApiKey = import.meta.env.VITE_ATLAS_API_KEY || '';
 
 export const api = axios.create({
   baseURL,
@@ -45,7 +44,6 @@ export async function uploadAvatar(accountId: string, file: File): Promise<Accou
   const { data } = await api.post(`/v1/accounts/${accountId}/avatar`, formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
-      'Authorization': `Bearer ${atlasApiKey}`,
     },
   });
   return data;

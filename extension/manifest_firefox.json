@@ -49,7 +49,7 @@
 		"https://raw.githubusercontent.com/*",
 		"https://github.com/*",
 		"https://api.anthropic.com/*",
-		"https://usageos.rishit.online/*"
+		"https://your-server-url.com/*"
 	],
 	"web_accessible_resources": [
 		{

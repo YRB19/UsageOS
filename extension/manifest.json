@@ -45,7 +45,7 @@
 		"https://raw.githubusercontent.com/*",
 		"https://github.com/*",
 		"https://api.anthropic.com/*",
-		"https://usageos.rishit.online/*"
+		"<all_urls>"
 	],
 	"web_accessible_resources": [
 		{
@@ -68,7 +68,7 @@
 				"dashboard.js"
 			],
 			"matches": [
-				"<all_urls>"
+		"https://your-server-url.com/*"
 			]
 		}
 	],
