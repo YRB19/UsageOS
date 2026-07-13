@@ -115,7 +115,7 @@ async def put_note(account_id: str, body: NoteIn, db: Session = Depends(get_sync
     return note
 
 
-@router.post("/{account_id}/avatar", response_model=AccountOut, dependencies=[Depends(verify_api_key)])
+@router.post("/{account_id}/avatar", response_model=AccountOut)
 async def upload_avatar(account_id: str, file: UploadFile = File(...), db: Session = Depends(get_sync_db)):
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
