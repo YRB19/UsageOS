@@ -208,6 +208,8 @@ class UsageUI {
 		this.lastUpdateTime = 0;
 		this.updateInterval = 1000;
 		this.wasPeakHours = isPeakHours();
+		this.lastDataUpdateTime = 0;
+		this.dataPollInterval = 60000;
 
 
 		this.setupMessageListener();
@@ -269,21 +271,6 @@ class UsageUI {
 		sectionsContainer.appendChild(this.usageSection.elements.container);
 		content.appendChild(sectionsContainer);
 
-		// Add footers
-		const isElectron = await sendBackgroundMessage({ type: 'isElectron' });
-		if (!isElectron) {
-			const desktopFooter = this.createDesktopFooter();
-			content.appendChild(desktopFooter);
-
-			const qolFooter = this.createQoLFooter();
-			if (qolFooter) {
-				content.appendChild(qolFooter);
-			}
-		}
-
-		const donateFooter = this.createDonateFooter();
-		content.appendChild(donateFooter);
-
 		container.appendChild(header);
 		container.appendChild(content);
 
@@ -320,54 +307,6 @@ class UsageUI {
 		header.appendChild(title);
 		header.appendChild(settingsButton);
 		return header;
-	}
-
-	createDesktopFooter() {
-		const footer = document.createElement('div');
-		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1';
-
-		const link = document.createElement('a');
-		link.href = 'https://github.com/lugia19/claude-webext-patcher';
-		link.target = '_blank';
-		link.className = 'ut-link hover:text-text-200';
-		link.style.color = BLUE_HIGHLIGHT;
-		link.textContent = '💻 ' + localize('usage.footer_desktop');
-
-		footer.appendChild(link);
-		return footer;
-	}
-
-	createQoLFooter() {
-		const footer = document.createElement('div');
-		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1 ut-qol-footer';
-
-		const isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
-		const link = document.createElement('a');
-		link.href = isChrome
-			? 'https://chromewebstore.google.com/detail/claude-qol/dkdnancajokhfclpjpplkhlkbhaeejob'
-			: 'https://addons.mozilla.org/en-US/firefox/addon/claude-qol/';
-		link.target = '_blank';
-		link.className = 'ut-link hover:text-text-200';
-		link.style.color = BLUE_HIGHLIGHT;
-		link.textContent = '⚡ ' + localize('usage.footer_qol');
-
-		footer.appendChild(link);
-		return footer;
-	}
-
-	createDonateFooter() {
-		const footer = document.createElement('div');
-		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1';
-
-		const link = document.createElement('a');
-		link.href = 'https://ko-fi.com/lugia19';
-		link.target = '_blank';
-		link.className = 'ut-link';
-		link.style.cssText = 'background: #2c84db; color: white; padding: 2px 6px; border-radius: 4px; display: inline-block;';
-		link.textContent = '☕ ' + localize('usage.footer_kofi');
-
-		footer.appendChild(link);
-		return footer;
 	}
 
 	createChatElements() {
@@ -587,6 +526,7 @@ class UsageUI {
 
 		this.state.usageData = UsageData.fromJSON(usageDataJSON);
 		this.state.refreshedExpiredLimits.clear();
+		this.lastDataUpdateTime = Date.now();
 		this.renderAll();
 	}
 
@@ -625,16 +565,6 @@ class UsageUI {
 		}
 	}
 
-	checkQoLInstalled() {
-		const hasQoL = document.documentElement.hasAttribute('data-claude-qol-installed');
-		if (hasQoL) {
-			const qolFooter = this.elements.sidebar?.container?.querySelector('.ut-qol-footer');
-			if (qolFooter) {
-				qolFooter.remove();
-			}
-		}
-	}
-
 	// ========== UPDATE LOOP ==========
 
 	startUpdateLoop() {
@@ -645,9 +575,14 @@ class UsageUI {
 				this.checkExpiredLimits();
 				this.checkModelChange();
 				this.checkPeakHoursChange();
-				this.checkQoLInstalled();
 				this.mountSidebar();
 				this.mountChatArea();
+
+				// Fallback: if no data update received for dataPollInterval, request fresh data
+				if (this.lastDataUpdateTime === 0 || Date.now() - this.lastDataUpdateTime > this.dataPollInterval) {
+					Log('UsageUI: No data update received recently, requesting fresh data');
+					sendBackgroundMessage({ type: 'requestData' });
+				}
 			}
 			requestAnimationFrame(update);
 		};

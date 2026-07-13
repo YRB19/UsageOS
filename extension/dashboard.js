@@ -11,9 +11,28 @@ const LIMIT_LABELS = {
 };
 
 let accountsData = [];
+let notesData = {}; // orgId → note content (from backend)
+let avatarData = {}; // orgId → avatar_url (from backend)
 let notesDebounceTimers = {};
 let chartInstance = null;
 let nicknameCache = {};
+
+// Explicitly register Chart.js components to prevent auto-detection issues
+// (Chart.js v4 UMD should auto-register, but being explicit prevents date-scale inference)
+if (window.Chart) {
+	try {
+		window.Chart.register(
+			window.Chart.CategoryScale,
+			window.Chart.LinearScale,
+			window.Chart.PointElement,
+			window.Chart.LineElement,
+			window.Chart.Title,
+			window.Chart.Tooltip,
+			window.Chart.Legend,
+			window.Chart.Filler
+		);
+	} catch (_) { /* ignore if already registered or Chart not loaded yet */ }
+}
 
 document.addEventListener('DOMContentLoaded', initDashboard);
 
@@ -56,11 +75,19 @@ async function loadAccounts() {
 			const fallback = await browser.runtime.sendMessage({ type: 'getAllAccountsFromBackend' });
 			console.log('[Dashboard] Fallback response:', fallback);
 			if (fallback.ok && fallback.data) {
+				// Build notes and avatar caches from backend response
+				for (const acc of fallback.data) {
+					if (acc.org_id) {
+						notesData[acc.org_id] = acc.note || '';
+						if (acc.avatar_url) avatarData[acc.org_id] = acc.avatar_url;
+					}
+				}
 				// Convert backend format to popup format
 				response = fallback.data.map(acc => ({
 					orgId: acc.org_id,
 					orgName: acc.nickname || acc.email,
 					email: acc.email,
+					avatarUrl: acc.avatar_url || null,
 					usageData: {
 						limits: (acc.limits || []).reduce((obj, lim) => {
 							obj[lim.limit_type] = {
@@ -80,6 +107,7 @@ async function loadAccounts() {
 		console.log('[Dashboard] Final accountsData:', accountsData);
 		renderAccounts();
 		await loadAllNicknames();
+		await loadNotesFromBackend();
 	} catch (err) {
 		console.error('[Dashboard] loadAccounts error:', err);
 		const listView = document.getElementById('list-view');
@@ -100,7 +128,8 @@ function renderAccounts() {
 	const grid = document.getElementById('accounts-grid');
 	console.log('[Dashboard] renderAccounts called, accountsData:', accountsData);
 	if (!grid) {
-		console.error('[Dashboard] accounts-grid element not found!');
+		console.error('[Dashboard] accounts-grid element not found! Retrying after microtask...');
+		queueMicrotask(renderAccounts);
 		return;
 	}
 
@@ -140,10 +169,16 @@ function createAccountCard(account) {
 	const email = account.email || 'Unknown email';
 	const usageData = account.usageData;
 	const orgName = account.orgName || account.orgId;
+	const avatarUrl = avatarData[account.orgId] || account.avatarUrl || null;
 
 	card.innerHTML = `
 		<div class="account-header">
-			<div class="account-avatar" style="background: ${getAccountColor(account.orgId)}">${escapeHtml(getInitials(orgName))}</div>
+			<div class="account-avatar" style="background: ${avatarUrl ? 'transparent' : getAccountColor(account.orgId)}">
+				${avatarUrl
+					? `<img src="${escapeHtml(avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:10px;">`
+					: escapeHtml(getInitials(orgName))
+				}
+			</div>
 			<div class="account-info">
 				<div class="account-name-row">
 					<h3 class="account-nickname" data-org-id="${account.orgId}" data-has-nickname="${nickname ? 'true' : 'false'}">${escapeHtml(nickname || orgName)}</h3>
@@ -175,6 +210,7 @@ async function showDetailView(account) {
 	const listView = document.getElementById('list-view');
 
 	// Show loading
+	const detailAvatarUrl = avatarData[account.orgId] || account.avatarUrl || null;
 	detailView.innerHTML = `
 		<div class="detail-header">
 			<button class="btn" id="back-btn">
@@ -182,7 +218,12 @@ async function showDetailView(account) {
 				Back
 			</button>
 			<div class="detail-account-info">
-				<div class="detail-avatar" id="detail-avatar" style="background: ${getAccountColor(account.orgId)}">${escapeHtml(getInitials(account.orgName || account.orgId))}</div>
+				<div class="detail-avatar" id="detail-avatar" style="background: ${detailAvatarUrl ? 'transparent' : getAccountColor(account.orgId)}">
+					${detailAvatarUrl
+						? `<img src="${escapeHtml(detailAvatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:12px;">`
+						: escapeHtml(getInitials(account.orgName || account.orgId))
+					}
+				</div>
 				<div>
 					<h2 class="detail-nickname" id="detail-nickname">${escapeHtml(getNickname(account.orgId) || account.orgName || account.orgId)}</h2>
 					<p class="detail-email" id="detail-email">${escapeHtml(account.email || 'Unknown')}</p>
@@ -227,9 +268,10 @@ async function showDetailView(account) {
 			<div class="error-state" style="padding: 60px 20px;">
 				<h2>Failed to load history</h2>
 				<p>${escapeHtml(err.message)}</p>
-				<button class="btn btn-primary" onclick="showDetailView(${JSON.stringify(account).replace(/"/g, '"')})">Retry</button>
+				<button class="btn btn-primary retry-history-btn">Retry</button>
 			</div>
 		`;
+		detailView.querySelector('.retry-history-btn').addEventListener('click', () => showDetailView(account));
 	}
 }
 
@@ -315,7 +357,8 @@ function renderHistoryChart(chartData) {
 	const sortedTimes = Array.from(allTimes).sort();
 	const timeLabels = sortedTimes.map(t => {
 		const d = new Date(t);
-		return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+		// Use time-only format to prevent Chart.js v4 from inferring time scale
+		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 	});
 
 	for (let i = 0; i < limitTypes.length; i++) {
@@ -474,12 +517,7 @@ function createLimitRowHTML(limit) {
 }
 
 function createNotesHTML(orgId) {
-	let note = '';
-	try {
-		note = localStorage.getItem(`usageos_note_${orgId}`) || '';
-	} catch (e) {
-		note = '';
-	}
+	const note = notesData[orgId] || '';
 
 	return `
 		<div class="notes-section">
@@ -557,18 +595,22 @@ function scheduleNoteSave(orgId, textarea) {
 
 async function saveNote(orgId, textarea) {
 	const note = textarea.value;
+	// Update local cache immediately
+	notesData[orgId] = note;
 	try {
-		await browser.storage.local.set({ [`usageos_note_${orgId}`]: note });
+		await browser.runtime.sendMessage({ type: 'putNote', orgId, content: note });
 		showSavedIndicator(orgId);
 	} catch (e) {
-		localStorage.setItem(`usageos_note_${orgId}`, note);
-		showSavedIndicator(orgId);
+		console.error('[Dashboard] Failed to save note to backend:', e);
+		showSavedIndicator(orgId, true);
 	}
 }
 
-function showSavedIndicator(orgId) {
+function showSavedIndicator(orgId, isError = false) {
 	const indicator = document.querySelector(`.notes-saved-indicator[data-org-id="${orgId}"]`);
 	if (indicator) {
+		indicator.textContent = isError ? 'Error saving' : 'Saved';
+		indicator.style.color = isError ? 'var(--highlight)' : 'var(--accent)';
 		indicator.classList.add('visible');
 		setTimeout(() => indicator.classList.remove('visible'), 2000);
 	}
@@ -616,6 +658,30 @@ async function loadAllNicknames() {
 			nicknameEl.textContent = nickname;
 			nicknameEl.dataset.hasNickname = 'true';
 		}
+	}
+}
+
+async function loadNotesFromBackend() {
+	try {
+		const result = await browser.runtime.sendMessage({ type: 'getAllAccountsFromBackend' });
+		if (result.ok && result.data) {
+			for (const acc of result.data) {
+				if (acc.org_id) {
+					notesData[acc.org_id] = acc.note || '';
+					if (acc.avatar_url) avatarData[acc.org_id] = acc.avatar_url;
+				}
+			}
+			// Re-render to pick up any notes that weren't loaded during fallback path
+			for (const account of accountsData) {
+				if (account.error) continue;
+				const textarea = document.querySelector(`.notes-textarea[data-org-id="${account.orgId}"]`);
+				if (textarea && !textarea.value && notesData[account.orgId]) {
+					textarea.value = notesData[account.orgId];
+				}
+			}
+		}
+	} catch (e) {
+		console.error('[Dashboard] Failed to load notes from backend:', e);
 	}
 }
 

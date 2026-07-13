@@ -214,41 +214,11 @@ class ButtonNotificationCard extends FloatingCard {
 		return link;
 	}
 
-	addKofiButton() {
-		this.addImageButton('https://ko-fi.com/R6R14IUBY', 'kofi-button.png', 'Buy Me a Coffee at ko-fi.com');
-	}
+	addKofiButton() {}
 
-	addQoLButton() {
-		const hasQoL = document.documentElement.hasAttribute('data-claude-qol-installed');
-		if (hasQoL) return;
+	addQoLButton() {}
 
-		const isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
-		const href = isChrome
-			? 'https://chromewebstore.google.com/detail/claude-qol/dkdnancajokhfclpjpplkhlkbhaeejob'
-			: 'https://addons.mozilla.org/en-US/firefox/addon/claude-qol/';
-		const link = this.addImageButton(href, 'qol-badge.png', 'Get Claude QoL Extension');
-		const img = link.querySelector('img');
-		img.style.borderRadius = '4px';
-		img.style.display = 'inline-block';
-	}
-
-	async addDesktopFooter() {
-		const isElectron = await sendBackgroundMessage({ type: 'isElectron' });
-		if (isElectron) return;
-
-		const footer = document.createElement('div');
-		footer.className = 'ut-desktop-footer';
-
-		const link = document.createElement('a');
-		link.href = 'https://github.com/lugia19/claude-webext-patcher';
-		link.target = '_blank';
-		link.className = 'ut-link';
-		link.style.color = BLUE_HIGHLIGHT;
-		link.textContent = localize('card.desktop_cta');
-
-		footer.appendChild(link);
-		this.element.appendChild(footer);
-	}
+	async addDesktopFooter() {}
 
 }
 
@@ -310,10 +280,6 @@ class VersionNotificationCard extends ButtonNotificationCard {
 		patchNotesLink.textContent = localize('card.release_notes');
 		this.element.appendChild(patchNotesLink);
 
-		this.addKofiButton();
-		this.addQoLButton();
-		this.addDesktopFooter();
-
 		this.addCloseButton();
 		this.makeCardDraggable(dragHandle);
 	}
@@ -344,9 +310,6 @@ class DonationNotificationCard extends ButtonNotificationCard {
 		this.element.appendChild(dragHandle);
 		this.element.appendChild(message);
 		this.element.appendChild(supportMessage);
-
-		this.addKofiButton();
-		this.addQoLButton();
 
 		this.addCloseButton();
 		this.makeCardDraggable(dragHandle);

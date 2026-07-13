@@ -1,9 +1,9 @@
 /* global localize, fmtNum, normalizeLocale, setLocaleOverride */
 'use strict';
 
-// Constants (UsageOS palette)
-const BLUE_HIGHLIGHT = "#ff8906";
-const RED_WARNING = "#f25f4c";
+// Constants
+const BLUE_HIGHLIGHT = "#2c84db";
+const RED_WARNING = "#de2929";
 const SUCCESS_GREEN = "#22c55e";
 
 const SELECTORS = {
@@ -855,6 +855,50 @@ function mountToAnchor(element, anchor) {
 	return true;
 }
 
+// Scrape the account email from the page DOM.
+// Scoped to likely account-info containers first, then falls back to full body.
+// Filters out common false-positive patterns (support@, noreply@, etc.).
+function scrapeEmailFromDOM() {
+	const EMAIL_REGEX = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+	const EXCLUDED = /^(support|noreply|no-reply|help|admin|info|contact|security|abuse|postmaster|webmaster)@/i;
+
+	// Prefer scoped search: account menu elements likely to contain the user's email
+	const SELECTORS = [
+		'[data-testid="account-settings"]',
+		'[data-testid="settings-panel"]',
+		'[role="menu"]',
+		'[data-testid="org-settings"]',
+		'.settings-panel',
+		'nav',
+	];
+
+	const containers = [];
+	for (const sel of SELECTORS) {
+		try {
+			const els = document.querySelectorAll(sel);
+			els.forEach(el => containers.push(el));
+		} catch (_) { /* invalid selector, skip */ }
+	}
+	containers.push(document.body);
+
+	const seen = new Set();
+	for (const container of containers) {
+		const text = container.innerText || '';
+		const matches = text.match(EMAIL_REGEX);
+		if (!matches) continue;
+
+		for (const email of matches) {
+			const lower = email.toLowerCase();
+			if (seen.has(lower)) continue;
+			seen.add(lower);
+			if (!EXCLUDED.test(lower)) {
+				return email;
+			}
+		}
+	}
+	return null;
+}
+
 // Main initialization
 async function initExtension() {
 	if (window.claudeTrackerInstance) {
@@ -888,6 +932,17 @@ async function initExtension() {
         await Log('Incognito mode: skipping sidebar anchor wait');
         sendBackgroundMessage({ type: 'requestData' });
         sendBackgroundMessage({ type: 'initOrg' });
+
+        // Scrape email even in incognito
+        const orgId = getActiveOrgId();
+        if (orgId) {
+            const scrapedEmail = scrapeEmailFromDOM();
+            if (scrapedEmail) {
+                await browser.storage.local.set({ [`accountEmail_${orgId}`]: scrapedEmail });
+                await Log('Scraped email from DOM (incognito):', scrapedEmail, 'for org:', orgId);
+            }
+        }
+
         await Log('Initialization complete. Ready to track tokens.');
         return;
     }
@@ -928,6 +983,16 @@ async function initExtension() {
 	// Request initial data
 	sendBackgroundMessage({ type: 'requestData' });
 	sendBackgroundMessage({ type: 'initOrg' });
+
+	// Scrape account email from DOM and store for background fallback
+	const orgId = getActiveOrgId();
+	if (orgId) {
+		const scrapedEmail = scrapeEmailFromDOM();
+		if (scrapedEmail) {
+			await browser.storage.local.set({ [`accountEmail_${orgId}`]: scrapedEmail });
+			await Log('Scraped email from DOM:', scrapedEmail, 'for org:', orgId);
+		}
+	}
 
 	await Log('Initialization complete. Ready to track tokens.');
 }
