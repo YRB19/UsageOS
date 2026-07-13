@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { AvatarUpload } from './AvatarUpload';
 import { EditableNickname } from './EditableNickname';
 import { ColorPicker } from './ColorPicker';
 import { TelegramChatIdPicker } from './TelegramChatIdPicker';
@@ -84,6 +85,13 @@ export function AccountCard({ account, index, onAccountUpdated, onNavigate }: Ac
         {/* Header */}
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <AvatarUpload
+              accountId={account.id}
+              avatarUrl={account.avatar_url}
+              color={account.color}
+              name={account.nickname || account.email || 'Unknown'}
+              onUpdated={(url) => handleUpdated({ avatar_url: url })}
+            />
             <ColorPicker
               accountId={account.id}
               color={account.color}

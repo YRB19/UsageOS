@@ -7,6 +7,7 @@ export interface Account {
   color: string;
   telegram_chat_id: string | null;
   subscription_tier: string | null;
+  avatar_url: string | null;
   note: string | null;
   created_at: string;
 }

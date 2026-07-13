@@ -10,7 +10,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
-import { ArrowLeft, Zap, Activity } from 'lucide-react';
+import { ArrowLeft, Activity } from 'lucide-react';
 import { getAccounts, getSyncHistory } from '../lib/api';
 import type { AccountWithUsage, SyncEvent } from '../lib/types';
 import { LIMIT_LABELS, LIMIT_ORDER } from '../lib/types';
@@ -164,8 +164,8 @@ export default function AccountHistoryPage() {
             <span className="text-sm font-medium">Back</span>
           </motion.button>
           <div className="flex-1 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: account.color }}>
-              <Zap className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden" style={{ backgroundColor: account.color }}>
+              <img src="/icon128.png" alt="" className="w-6 h-6 object-contain" />
             </div>
             <div className="min-w-0">
               <h1 className="text-base font-semibold text-foreground truncate">{account.nickname || account.email || 'Unknown'}</h1>
