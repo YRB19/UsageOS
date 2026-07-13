@@ -47,6 +47,7 @@ class AccountOut(BaseModel):
     color: str
     telegram_chat_id: Optional[str] = None
     subscription_tier: Optional[str] = None
+    avatar_url: Optional[str] = None
     note: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -60,6 +61,7 @@ class AccountWithUsage(BaseModel):
     color: str
     telegram_chat_id: Optional[str] = None
     subscription_tier: Optional[str] = None
+    avatar_url: Optional[str] = None
     note: Optional[str] = None
     created_at: datetime
     limits: list[dict] = []
