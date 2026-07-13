@@ -22,11 +22,12 @@ RUN pip install --no-cache-dir \
     pydantic==2.10.3 \
     pydantic-settings==2.6.1 \
     python-dotenv==1.0.1 \
-    httpx==0.28.0
+    httpx==0.28.0 \
+    python-multipart==0.0.12
 
 COPY . .
 
-RUN mkdir -p /app/alembic/versions
+RUN mkdir -p /app/alembic/versions /app/uploads/avatars
 
 EXPOSE 8000
 
