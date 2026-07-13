@@ -1,7 +1,8 @@
 import axios from 'axios';
-import type { AccountWithUsage, SyncEvent, NoteResponse } from './types';
+import type { AccountWithUsage, Account, SyncEvent, NoteResponse } from './types';
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
+const atlasApiKey = import.meta.env.VITE_ATLAS_API_KEY || '';
 
 export const api = axios.create({
   baseURL,
@@ -36,4 +37,16 @@ export async function getSyncHistory(accountId: string, limit = 50): Promise<Syn
     params: { limit },
   });
   return data || [];
+}
+
+export async function uploadAvatar(accountId: string, file: File): Promise<Account> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const { data } = await api.post(`/v1/accounts/${accountId}/avatar`, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+      'Authorization': `Bearer ${atlasApiKey}`,
+    },
+  });
+  return data;
 }

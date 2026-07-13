@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Zap, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 
 interface HeaderProps {
   loading: boolean;
@@ -18,8 +18,8 @@ export function Header({ loading, accountCount, lastUpdated, onRefresh }: Header
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-primary/10">
-            <Zap className="w-4 h-4 text-accent-primary" />
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent-primary/10 overflow-hidden">
+            <img src="/icon128.png" alt="UsageOS" className="w-5 h-5 object-contain" />
           </div>
           <div>
             <h1 className="text-base font-semibold tracking-tight text-foreground">

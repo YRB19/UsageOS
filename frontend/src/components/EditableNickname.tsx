@@ -63,6 +63,7 @@ export function EditableNickname({
                 setEditing(false);
               }
             }}
+            onClick={(e) => e.stopPropagation()}
             className="w-full bg-transparent border-b border-accent-primary/50 text-foreground text-sm font-semibold outline-none px-0 py-0.5"
             placeholder="Nickname..."
           />
@@ -73,7 +74,10 @@ export function EditableNickname({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            onClick={() => setEditing(true)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditing(true);
+            }}
             className="group/nick flex items-center gap-1.5 text-left min-w-0 cursor-text"
           >
             <span className="text-sm font-semibold text-foreground truncate group-hover/nick:text-accent-primary transition-colors duration-200">

@@ -4,7 +4,7 @@ import { getAccounts } from '../lib/api';
 import { Header } from '../components/Header';
 import { AccountCard } from '../components/AccountCard';
 import type { AccountWithUsage } from '../lib/types';
-import { Activity, Zap } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
@@ -91,8 +91,8 @@ export default function Dashboard() {
               transition={{ duration: 0.4 }}
               className="flex flex-col items-center justify-center py-24"
             >
-              <div className="w-16 h-16 rounded-2xl glass flex items-center justify-center mb-5">
-                <Zap className="w-7 h-7 text-accent-primary/50" />
+              <div className="w-16 h-16 rounded-2xl glass flex items-center justify-center mb-5 overflow-hidden">
+                <img src="/icon128.png" alt="UsageOS" className="w-9 h-9 object-contain opacity-50" />
               </div>
               <h2 className="text-lg font-semibold text-foreground/80 mb-2">
                 No accounts connected

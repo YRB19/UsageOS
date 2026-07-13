@@ -52,6 +52,8 @@ export function NotesTextarea({ accountId, initialContent }: NotesTextareaProps)
       <textarea
         value={content}
         onChange={handleChange}
+        onClick={(e) => e.stopPropagation()}
+        onFocus={(e) => e.stopPropagation()}
         placeholder="Add a note..."
         rows={2}
         className="w-full bg-transparent text-[12px] text-muted/70 placeholder-muted/25 resize-none outline-none leading-relaxed group-hover/note:text-muted/90 transition-colors duration-200"
