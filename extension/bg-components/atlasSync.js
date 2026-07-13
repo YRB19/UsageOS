@@ -28,6 +28,7 @@ class AtlasSync {
         this._apiKey  = null;
         this._ready   = false;
         this._initPromise = null;
+        this._accountsCache = null; // { orgId → { id, ... } }
     }
 
     async init(force = false) {
@@ -140,6 +141,26 @@ class AtlasSync {
         }
     }
 
+    async _put(path, body) {
+        const ac = new AbortController();
+        const timeout = setTimeout(() => ac.abort(), SYNC_TIMEOUT_MS);
+        try {
+            const resp = await fetch(`${this._baseUrl}${path}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this._apiKey}`
+                },
+                body: JSON.stringify(body),
+                signal: ac.signal
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+            return resp.json();
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
     async _get(path) {
         const ac = new AbortController();
         const timeout = setTimeout(() => ac.abort(), SYNC_TIMEOUT_MS);
@@ -180,7 +201,31 @@ class AtlasSync {
 
         try {
             const accounts = await this._get('/api/v1/accounts');
+            // Cache accounts by orgId for note saves (orgId → { id, ... })
+            this._accountsCache = {};
+            for (const acc of accounts) {
+                if (acc.org_id) this._accountsCache[acc.org_id] = acc;
+            }
             return { ok: true, data: accounts };
+        } catch (err) {
+            return { ok: false, reason: err.message };
+        }
+    }
+
+    async putNote(orgId, content) {
+        await this.init();
+        if (!this.isConfigured()) return { ok: false, reason: 'not_configured' };
+
+        // Ensure we have the accounts cache
+        if (!this._accountsCache || !this._accountsCache[orgId]) {
+            await this.getAllAccountsFromBackend();
+        }
+        const account = this._accountsCache?.[orgId];
+        if (!account) return { ok: false, reason: 'account_not_found' };
+
+        try {
+            const result = await this._put(`/api/v1/accounts/${account.id}/note`, { content });
+            return { ok: true, data: result };
         } catch (err) {
             return { ok: false, reason: err.message };
         }

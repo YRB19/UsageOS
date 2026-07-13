@@ -353,6 +353,12 @@ messageRegistry.register('getAllAccountsFromBackend', async () => {
 	return atlasSync.getAllAccountsFromBackend();
 });
 
+messageRegistry.register('putNote', async (message) => {
+	const { orgId, content } = message;
+	if (!orgId) return { ok: false, reason: 'missing_orgId' };
+	return atlasSync.putNote(orgId, content);
+});
+
 // Per-account notes & nicknames
 async function getAccountNote(message) {
 	const { orgId } = message;

@@ -129,11 +129,10 @@ class ClaudeAPI {
 		const cached = await accountEmailCache.get(cacheKey);
 		if (cached) return cached;   // only short-circuit on a real cached email
 
+		// 1) Try the account_profile API (returns email for some account types)
 		try {
 			const profileData = await this.getRequest('/account_profile');
 
-			// Try every plausible field name/shape — log the raw shape if none match
-			// so we can see the real API response and correct this on the next pass.
 			const email =
 				profileData?.email_address ||
 				profileData?.email ||
@@ -142,17 +141,49 @@ class ClaudeAPI {
 				profileData?.memberships?.[0]?.account?.email_address ||
 				null;
 
-			if (!email) {
-				await Log("warn", "getAccountEmail: no email field matched, raw profileData:", profileData);
-				return null;   // do NOT cache — retry next time
+			if (email) {
+				await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+				return email;
 			}
-
-			await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
-			return email;
+			await Log("getAccountEmail: no email field in profileData, trying fallbacks");
 		} catch (error) {
-			await Log("warn", "Failed to fetch account email:", error);
-			return null;   // do NOT cache — retry next time
+			await Log("warn", "getAccountEmail: API fetch failed, trying fallbacks:", error);
 		}
+
+		// 2) Org-name regex: personal-tier orgs are named "{email}'s Organization"
+		try {
+			const org = await this.getOrgInfo();
+			if (org?.name) {
+				const suffix = "'s Organization";
+				if (org.name.endsWith(suffix)) {
+					const email = org.name.slice(0, -suffix.length);
+					// Validate: must contain exactly one @ with non-empty parts on both sides
+					const parts = email.split('@');
+					if (parts.length === 2 && parts[0].length > 0 && parts[1].includes('.')) {
+						await accountEmailCache.set(cacheKey, email, 24 * 60 * 60 * 1000);
+						return email;
+					}
+				}
+			}
+		} catch (error) {
+			await Log("warn", "getAccountEmail: org-name regex failed:", error);
+		}
+
+		// 3) DOM-scraped email stored by content script on page load
+		try {
+			const storageKey = `accountEmail_${this.orgId}`;
+			const result = await browser.storage.local.get(storageKey);
+			const domEmail = result[storageKey];
+			if (domEmail) {
+				await accountEmailCache.set(cacheKey, domEmail, 24 * 60 * 60 * 1000);
+				return domEmail;
+			}
+		} catch (error) {
+			await Log("warn", "getAccountEmail: DOM email storage read failed:", error);
+		}
+
+		await Log("warn", "getAccountEmail: all methods failed for org:", this.orgId);
+		return null;   // do NOT cache — retry next time
 	}
 
 	async getProfileTokens() {
@@ -168,10 +199,31 @@ class ClaudeAPI {
 	async getOrgInfo(skipCache = false) {
 		try {
 			const cached = await subscriptionTiersCache.get(this.orgId);
-			if (cached && !skipCache && typeof cached === 'object' && cached.capabilities) return cached;
+			// Also force a re-fetch if the email isn't cached yet — the bootstrap response
+			// contains the email in appStartData.account, so we need to fetch it at least once.
+			const emailCacheKey = this.orgId || 'default';
+			const emailCached = await accountEmailCache.get(emailCacheKey);
+			const orgCached = cached && !skipCache && typeof cached === 'object' && cached.capabilities;
+			if (orgCached && emailCached) return cached;
+
 			const appStartData = await this.getRequest(`/bootstrap/${this.orgId}/app_start?statsig_hashing_algorithm=djb2`);
 			const memberships = appStartData.account?.memberships || [];
 			const org = memberships.find(membership => membership.organization.uuid === this.orgId)?.organization;
+
+			// Opportunistically extract email from the account object — this response is the
+			// same one that loads when the user opens the account menu, so the email is present
+			// here even when /account_profile doesn't return it.
+			const accountEmail =
+				appStartData.account?.email_address ||
+				appStartData.account?.email ||
+				null;
+			if (accountEmail) {
+				// Only set if not already cached — don't overwrite a previously-resolved email
+				if (!emailCached) {
+					await accountEmailCache.set(emailCacheKey, accountEmail, 24 * 60 * 60 * 1000);
+					await Log("getOrgInfo: extracted email from bootstrap response:", accountEmail);
+				}
+			}
 
 			await Log("Fetched org info for:", this.orgId, org?.name);
 			await subscriptionTiersCache.set(this.orgId, org, 24 * 60 * 60 * 1000);
