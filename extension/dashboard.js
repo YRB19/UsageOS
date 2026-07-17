@@ -147,12 +147,27 @@ function renderAccounts() {
 	}
 
 	grid.innerHTML = '';
-	for (let i = 0; i < accountsData.length; i++) {
-		const card = createAccountCard(accountsData[i]);
+	const renderableAccounts = accountsData.filter(a => !a.error);
+	if (!renderableAccounts.length) {
+		grid.innerHTML = `
+			<div class="empty-state">
+				<div class="empty-state-icon">&#9889;</div>
+				<h2>No accounts found</h2>
+				<p>Open Claude.ai in your browser to start tracking usage.</p>
+				<button class="btn btn-primary" id="refresh-btn-empty">Refresh</button>
+			</div>
+		`;
+		document.getElementById('refresh-btn-empty').addEventListener('click', loadAccounts);
+		return;
+	}
+
+	grid.innerHTML = '';
+	for (let i = 0; i < renderableAccounts.length; i++) {
+		const card = createAccountCard(renderableAccounts[i]);
 		card.style.animationDelay = `${i * 0.05}s`;
 		grid.appendChild(card);
 	}
-	console.log('[Dashboard] Rendered', accountsData.length, 'cards');
+	console.log('[Dashboard] Rendered', renderableAccounts.length, 'cards');
 }
 
 function createAccountCard(account) {

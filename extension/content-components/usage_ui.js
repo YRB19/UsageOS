@@ -201,6 +201,8 @@ class UsageUI {
 
 		// Sub-component
 		this.usageSection = null;
+		this.notesTextarea = null;
+		this.notesDebounceTimer = null;
 
 		this.uiReady = false;
 		this.pendingUpdate = null;
@@ -245,6 +247,9 @@ class UsageUI {
 		this.uiReady = true;
 		await Log('UsageUI: Ready');
 
+		// Load notes for current account
+		this.loadNotes();
+
 		// Process pending update (only most recent matters)
 		if (this.pendingUpdate) {
 			this.state.usageData = UsageData.fromJSON(this.pendingUpdate);
@@ -270,6 +275,28 @@ class UsageUI {
 		sectionsContainer.className = '-mx-1.5 flex flex-1 flex-col px-1.5 gap-px';
 		sectionsContainer.appendChild(this.usageSection.elements.container);
 		content.appendChild(sectionsContainer);
+
+		// Notes container
+		const notesContainer = document.createElement('div');
+		notesContainer.className = 'ut-container ut-notes-container mt-4';
+		notesContainer.style.marginTop = '1rem';
+
+		const notesLabel = document.createElement('h4');
+		notesLabel.className = 'ut-notes-label text-xs text-text-400 mb-1';
+		notesLabel.textContent = localize('usage.header'); // reuse "Usage" label or create new
+		notesLabel.textContent = 'Notes';
+
+		this.notesTextarea = document.createElement('textarea');
+		this.notesTextarea.className = 'ut-notes-textarea bg-bg-000 border border-border-400 text-text-000 ut-input text-xs resize-none';
+		this.notesTextarea.style.cssText = 'width: 100%; min-height: 80px; padding: 8px; border-radius: 6px; font-family: inherit;';
+		this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
+		this.notesTextarea.disabled = true;
+
+		this.notesTextarea.addEventListener('input', () => this.handleNotesInput());
+
+		notesContainer.appendChild(notesLabel);
+		notesContainer.appendChild(this.notesTextarea);
+		content.appendChild(notesContainer);
 
 		container.appendChild(header);
 		container.appendChild(content);
@@ -587,6 +614,64 @@ class UsageUI {
 			requestAnimationFrame(update);
 		};
 		requestAnimationFrame(update);
+	}
+
+	// ========== NOTES ==========
+
+	async loadNotes() {
+		if (!this.notesTextarea) return;
+
+		const orgId = getActiveOrgId();
+		if (!orgId) {
+			this.notesTextarea.placeholder = 'Notes unavailable — no active account';
+			this.notesTextarea.disabled = true;
+			return;
+		}
+
+		try {
+			const result = await sendBackgroundMessage({ type: 'getAllAccountsFromBackend' });
+			if (!result?.ok || !result?.data?.length) {
+				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
+				this.notesTextarea.disabled = true;
+				return;
+			}
+
+			const account = result.data.find(a => a.org_id === orgId);
+			if (!account) {
+				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
+				this.notesTextarea.disabled = true;
+				return;
+			}
+
+			this.currentAccountId = account.id;
+			this.notesTextarea.disabled = false;
+			this.notesTextarea.placeholder = 'Add notes for this account...';
+			this.notesTextarea.value = account.note || '';
+
+		} catch (err) {
+			await Log('UsageUI: Failed to load notes:', err);
+			this.notesTextarea.placeholder = 'Failed to load notes';
+			this.notesTextarea.disabled = true;
+		}
+	}
+
+	handleNotesInput() {
+		if (this.notesSaveTimer) clearTimeout(this.notesSaveTimer);
+		this.notesSaveTimer = setTimeout(() => this.saveNotes(), 800);
+	}
+
+	async saveNotes() {
+		if (!this.notesTextarea || this.notesTextarea.disabled || !this.currentAccountId) return;
+
+		const content = this.notesTextarea.value;
+		try {
+			const result = await sendBackgroundMessage({ type: 'putNote', orgId: getActiveOrgId(), content });
+			if (!result?.ok) {
+				await Log('UsageUI: Failed to save note:', result?.reason);
+			}
+		} catch (err) {
+			await Log('UsageUI: Failed to save note:', err);
+		}
 	}
 }
 
