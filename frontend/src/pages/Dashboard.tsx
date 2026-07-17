@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getAccounts } from '../lib/api';
 import { Header } from '../components/Header';
 import { AccountCard } from '../components/AccountCard';
+import { MaintenanceNotes } from '../components/MaintenanceNotes';
 import type { AccountWithUsage } from '../lib/types';
 import { Activity } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -104,7 +105,7 @@ export default function Dashboard() {
               <motion.a
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                href="https://github.com/YRB19/UsageOS"
+                href="https://github.com/your-username/UsageOS"
                 target="_blank"
                 rel="noreferrer"
                 className="mt-6 px-4 py-2 rounded-lg bg-accent-primary/10 border border-accent-primary/20 text-accent-primary text-[13px] font-medium hover:bg-accent-primary/20 transition-colors"
@@ -132,22 +133,38 @@ export default function Dashboard() {
           )}
         </AnimatePresence>
 
-        {/* Account Grid */}
+        {/* Account Grid + Maintenance Notes side-by-side */}
         {accounts.length > 0 && (
-          <motion.div
-            layout
-            className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
-          >
-            {accounts.map((account, i) => (
-              <AccountCard
-                key={account.id}
-                account={account}
-                index={i}
-                onAccountUpdated={handleAccountUpdated}
-                onNavigate={handleAccountClick}
-              />
-            ))}
-          </motion.div>
+          <div className="flex flex-col xl:flex-row gap-5">
+            {/* Account Grid — takes remaining space */}
+            <motion.div
+              layout
+              className="flex-1 min-w-0 grid grid-cols-1 md:grid-cols-2 gap-5"
+            >
+              {accounts.map((account, i) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  index={i}
+                  onAccountUpdated={handleAccountUpdated}
+                  onNavigate={handleAccountClick}
+                />
+              ))}
+            </motion.div>
+
+            {/* Sticky Note — right panel, sticks while scrolling */}
+            <motion.div
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 12 }}
+              transition={{ duration: 0.4, delay: 0.15 }}
+              className="w-full xl:w-72 flex-shrink-0"
+            >
+              <div className="xl:sticky xl:top-24">
+                <MaintenanceNotes />
+              </div>
+            </motion.div>
+          </div>
         )}
       </main>
 

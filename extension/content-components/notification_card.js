@@ -273,7 +273,7 @@ class VersionNotificationCard extends ButtonNotificationCard {
 		}
 
 		const patchNotesLink = document.createElement('a');
-		patchNotesLink.href = 'https://github.com/lugia19/Claude-Usage-Extension/releases';
+		patchNotesLink.href = 'https://github.com/your-username/Claude-Usage-Extension/releases';
 		patchNotesLink.target = '_blank';
 		patchNotesLink.className = 'ut-link ut-block ut-mb-2';
 		patchNotesLink.style.color = BLUE_HIGHLIGHT;
