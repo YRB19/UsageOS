@@ -21,4 +21,4 @@ Data Security
 - Only usage data is stored, no personal information
 
 User Rights
-- You can contact lugia19@lugia19.com for any privacy-related questions
+- You can contact your-email@example.com for any privacy-related questions

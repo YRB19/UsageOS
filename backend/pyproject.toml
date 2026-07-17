@@ -2,7 +2,7 @@
 name = "usageos-backend"
 version = "0.1.0"
 description = "UsageOS Backend API"
-authors = ["Rishit Dagli <rishit@rishit.online>"]
+authors = ["Your Name <your-email@example.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
