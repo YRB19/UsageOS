@@ -37,6 +37,11 @@ export interface NoteResponse {
   updated_at: string | null;
 }
 
+export interface MaintenanceNoteResponse {
+  content: string;
+  updated_at: string | null;
+}
+
 export const LIMIT_LABELS: Record<string, string> = {
   session: 'Session',
   weekly: 'Weekly',
