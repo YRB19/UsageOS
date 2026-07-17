@@ -30,7 +30,7 @@
 
 ### One-Command Deploy
 ```bash
-git clone https://github.com/YRB19/UsageOS.git
+git clone https://github.com/your-username/UsageOS.git
 cd UsageOS
 cp .env.example .env    # Edit with your values
 docker compose up -d
