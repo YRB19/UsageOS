@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import sync, accounts, telegram_webhook
+from app.routers import sync, accounts, telegram_webhook, maintenance
 from app.database import sync_engine, Base
 from app.telegram import send_telegram_message
 from app.database import SyncSessionLocal
@@ -154,6 +154,7 @@ app.add_middleware(
 app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
 app.include_router(accounts.router, prefix="/api/v1/accounts", tags=["accounts"])
 app.include_router(telegram_webhook.router)
+app.include_router(maintenance.router)
 
 @app.get("/")
 async def root():
