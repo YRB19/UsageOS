@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { pctColor, formatCountdown, formatResetTime } from '../lib/utils';
+import { pctColor, formatCountdown, formatResetTime, effectivePct } from '../lib/utils';
 import { LIMIT_LABELS } from '../lib/types';
 import type { UsageLimit } from '../lib/types';
 
@@ -9,9 +9,10 @@ interface UsageBarProps {
 }
 
 export function UsageBar({ limit, index }: UsageBarProps) {
-  const color = pctColor(limit.usage_pct);
-  const isMaxed = limit.usage_pct >= 100;
-  const isHigh = limit.usage_pct >= 80 && limit.usage_pct < 100;
+  const effPct = effectivePct(limit.usage_pct, limit.resets_at);
+  const color = pctColor(effPct);
+  const isMaxed = effPct >= 100;
+  const isHigh = effPct >= 80 && effPct < 100;
   const countdown = formatCountdown(limit.resets_at);
   const resetTime = formatResetTime(limit.resets_at);
   const label = LIMIT_LABELS[limit.limit_type] || limit.limit_type;
@@ -37,7 +38,7 @@ export function UsageBar({ limit, index }: UsageBarProps) {
               isMaxed ? 'text-accent-highlight' : isHigh ? 'text-accent-primary' : 'text-foreground/80'
             }`}
           >
-            {limit.usage_pct.toFixed(1)}%
+            {effPct.toFixed(1)}%
           </span>
           {countdown && (
             <span className="text-[10px] font-mono text-muted/50 opacity-0 group-hover/bar:opacity-100 transition-opacity duration-200">
@@ -50,7 +51,7 @@ export function UsageBar({ limit, index }: UsageBarProps) {
       <div className="h-[3px] rounded-full bg-border/50 overflow-hidden">
         <motion.div
           initial={{ width: 0 }}
-          animate={{ width: `${Math.min(limit.usage_pct, 100)}%` }}
+          animate={{ width: `${Math.min(effPct, 100)}%` }}
           transition={{
             duration: 0.8,
             delay: index * 0.08 + 0.2,

@@ -36,3 +36,10 @@ export function statusVariant(pct: number): 'ok' | 'warn' | 'maxed' {
   if (pct >= 80) return 'warn';
   return 'ok';
 }
+
+export function effectivePct(usage_pct: number, resets_at: string | null): number {
+  if (!resets_at) return usage_pct;
+  const resetTime = new Date(resets_at).getTime();
+  if (Date.now() >= resetTime) return 0;
+  return usage_pct;
+}
