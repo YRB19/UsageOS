@@ -1,5 +1,15 @@
 import axios from 'axios';
-import type { AccountWithUsage, Account, SyncEvent, NoteResponse } from './types';
+import type { AccountWithUsage, Account, SyncEvent, NoteResponse, MaintenanceNoteResponse } from './types';
+
+export async function getMaintenanceNote(): Promise<MaintenanceNoteResponse> {
+  const { data } = await api.get('/v1/maintenance/note');
+  return data;
+}
+
+export async function putMaintenanceNote(content: string): Promise<MaintenanceNoteResponse> {
+  const { data } = await api.put('/v1/maintenance/note', { content });
+  return data;
+}
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
 
