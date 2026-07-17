@@ -10,6 +10,7 @@ import { HistoryChart } from './HistoryChart';
 import { UsageBar } from './UsageBar';
 import { LIMIT_ORDER } from '../lib/types';
 import type { AccountWithUsage } from '../lib/types';
+import { effectivePct } from '../lib/utils';
 
 interface AccountCardProps {
   account: AccountWithUsage;
@@ -40,7 +41,7 @@ export function AccountCard({ account, index, onAccountUpdated, onNavigate }: Ac
 
   const maxPct =
     account.limits.length > 0
-      ? Math.max(...account.limits.map((l) => l.usage_pct))
+      ? Math.max(...account.limits.map((l) => effectivePct(l.usage_pct, l.resets_at)))
       : 0;
 
   const statusColor =
