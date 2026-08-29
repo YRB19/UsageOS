@@ -1,4 +1,5 @@
-/* global localize, fmtNum, normalizeLocale, setLocaleOverride */
+/* global localize, fmtNum, normalizeLocale, setLocaleOverride,
+   modelFamilyFromVersion, defaultModelForTier, defaultModelVersionForTier */
 'use strict';
 
 // Constants
@@ -234,30 +235,30 @@ async function waitForElement(target, selector, maxTime = 1000) {
 	return null;
 }
 
-async function getCurrentModel(maxWait = 3000) {
+// subscriptionTier decides the default when the picker can't be read - claude.ai defaults
+// Max to Opus and everyone else to Sonnet. Pass null if the tier isn't known yet.
+async function getCurrentModel(maxWait = 3000, subscriptionTier = null) {
 	const modelSelector = await waitForElement(document, SELECTORS.MODEL_PICKER, maxWait);
-	if (!modelSelector) return CONFIG.DEFAULT_MODEL;
+	if (!modelSelector) return defaultModelForTier(subscriptionTier);
 
-	const fullModelName = modelSelector.querySelector('.whitespace-nowrap')?.textContent?.trim()?.toLowerCase();
-	if (!fullModelName) return CONFIG.DEFAULT_MODEL;
+	const fullModelName = modelSelector.querySelector('.whitespace-nowrap')?.textContent?.trim();
+	if (!fullModelName) return defaultModelForTier(subscriptionTier);
 
-	for (const modelType of CONFIG.MODELS) {
-		if (fullModelName.includes(modelType.toLowerCase())) {
-			return modelType;
-		}
-	}
+	const matchedModel = modelFamilyFromVersion(fullModelName);
+	if (matchedModel) return matchedModel;
+
 	await Log("Could not find matching model, returning default")
-	return CONFIG.DEFAULT_MODEL;
+	return defaultModelForTier(subscriptionTier);
 }
 
-async function getCurrentModelVersion(maxWait = 3000) {
+async function getCurrentModelVersion(maxWait = 3000, subscriptionTier = null) {
 	const modelSelector = await waitForElement(document, SELECTORS.MODEL_PICKER, maxWait);
-	if (!modelSelector) return CONFIG.DEFAULT_MODEL_VERSION;
+	if (!modelSelector) return defaultModelVersionForTier(subscriptionTier);
 	const text = modelSelector.querySelector('.whitespace-nowrap')?.textContent?.trim();
-    if (!text) return CONFIG.DEFAULT_MODEL_VERSION;
+    if (!text) return defaultModelVersionForTier(subscriptionTier);
     const normalizedText = text.toLowerCase();
     const matchedModel = Object.keys(CONFIG.MODEL_VERSION_MAP).find(key => normalizedText.startsWith(key));
-	return matchedModel ? CONFIG.MODEL_VERSION_MAP[matchedModel] : CONFIG.DEFAULT_MODEL_VERSION;
+	return matchedModel ? CONFIG.MODEL_VERSION_MAP[matchedModel] : defaultModelVersionForTier(subscriptionTier);
 }
 
 function isMobileView() {
@@ -268,32 +269,27 @@ function isCodePage() {
 	return window.location.pathname.includes('claude-code-desktop') || window.location.pathname.includes('/code');
 }
 
-async function setupRequestInterception(patterns) {
-	// Set up event listeners in content script context
-	window.addEventListener('interceptedRequest', async (event) => {
-		await Log("Intercepted request", event.detail);
-		browser.runtime.sendMessage({
-			type: 'interceptedRequest',
-			details: event.detail
-		});
-	});
 
-	window.addEventListener('interceptedResponse', async (event) => {
-		await Log("Intercepted response", event.detail);
-		browser.runtime.sendMessage({
-			type: 'interceptedResponse',
-			details: event.detail
-		});
-	});
+// Which pieces of the sidebar section the user wants shown. Purely content-side UI state — the
+// background never reads it — so it lives in storage.local directly, like usageSectionCollapsed.
+// Keys are limit keys ('session', 'weekly', 'fableWeekly', 'extraUsage') plus 'desktopLink'.
+// A missing key means visible, so an empty object is the default "show everything".
+const SIDEBAR_DISPLAY_KEY = 'sidebarDisplay';
 
-	// Inject external request interception script with patterns as data attribute
-	const script = document.createElement('script');
-	script.src = browser.runtime.getURL('injections/webrequest-polyfill.js');
-	script.dataset.patterns = JSON.stringify(patterns);
-	script.onload = function () {
-		this.remove();
-	};
-	(document.head || document.documentElement).appendChild(script);
+async function getSidebarDisplayPrefs() {
+	const stored = await browser.storage.local.get(SIDEBAR_DISPLAY_KEY);
+	const prefs = stored[SIDEBAR_DISPLAY_KEY];
+	return (prefs && typeof prefs === 'object') ? prefs : {};
+}
+
+// Written whole, once, when the settings card is saved — never per-checkbox, so there is no
+// read-modify-write for concurrent edits to race over.
+async function setSidebarDisplayPrefs(prefs) {
+	await browser.storage.local.set({ [SIDEBAR_DISPLAY_KEY]: prefs });
+}
+
+function isSidebarItemVisible(prefs, key) {
+	return prefs[key] !== false;
 }
 
 
@@ -482,7 +478,7 @@ class ProgressBar {
 		this.bar.style.background = BLUE_HIGHLIGHT;
 
 		this.tooltip = document.createElement('div');
-		this.tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip';
+		this.tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip shadow-sm dark:shadow-panel-sm';
 
 		this.track.appendChild(this.bar);
 		this.container.appendChild(this.track);
@@ -507,7 +503,7 @@ class ProgressBar {
 			this.container.appendChild(this.marker);
 
 			this.markerTooltip = document.createElement('div');
-			this.markerTooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip';
+			this.markerTooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip shadow-sm dark:shadow-panel-sm';
 			getTooltipPortal().appendChild(this.markerTooltip);
 			setupTooltip(this.marker, this.markerTooltip);
 		}
@@ -596,9 +592,18 @@ function getSidebarDesktopAnchor() {
 	const navScroll = sidebarBody.querySelector('.dframe-nav-scroll');
 	if (!navScroll) return null;
 
+	// Mount INSIDE the scroll area, above the recents, rather than as a fixed block above it.
+	// Sitting outside meant our ~220px of bars ate the scroll area's flex basis: on a short
+	// viewport the recents collapsed to a few pixels and our own content overflowed onto the
+	// bottom tray, with no way to scroll any of it back. Inside, everything scrolls together.
+	// shrink-0 keeps the bars at full height instead of being squashed by the flex column.
+	const referenceNode = Array.from(navScroll.children)
+		.find(child => !child.classList.contains('ut-usage-sidebar')) || null;
+
 	return {
-		parent: navScroll.parentElement,
-		referenceNode: navScroll,
+		parent: navScroll,
+		referenceNode,
+		classes: { add: ['shrink-0'] },
 	};
 }
 
@@ -615,6 +620,91 @@ function getChatAreaRegularAnchor() {
 	};
 }
 
+// The title line is a single element that gets re-anchored as the layout changes, and
+// in-page navigation (incognito <-> normal chat) can hand it from one anchor to another
+// without a reload. Every titleArea anchor therefore spreads this reset and states the
+// muted-text class explicitly, so nothing the previous anchor set can survive the move.
+const TITLE_AREA_STYLE_RESET = {
+	flexBasis: '',
+	marginTop: '',
+	marginLeft: '',
+	paddingLeft: '',
+	position: '',
+	top: '',
+	zIndex: '',
+	minWidth: '',
+	overflow: '',
+	whiteSpace: '',
+};
+
+// Mobile headers are position:absolute with a fixed height, so forcing our line onto a
+// second line inside them renders it outside the header, on top of the message list (and
+// pushes the page's own buttons out with it). The layout already reserves the header's
+// height as margin-top on the sibling scroll container, so take a strip of that instead:
+// sit between the two and carry the reservation on our own margin. When our line is empty
+// its height is 0, so the scroller ends up exactly where the original margin put it.
+function getMobileTitleAreaAnchor(headerRow) {
+	const container = headerRow?.parentElement;
+	const scroller = container?.querySelector(':scope > .overflow-y-auto.overflow-x-hidden');
+	if (!scroller) return null;
+
+	const headerHeight = Math.round(headerRow.getBoundingClientRect().height);
+	if (!headerHeight) return null;
+
+	// An older build forced a wrap here, which is what pushed the header's own controls out.
+	headerRow.classList.remove('flex-wrap');
+	scroller.style.marginTop = '0px';
+
+	return {
+		parent: container,
+		referenceNode: scroller,
+		styles: {
+			...TITLE_AREA_STYLE_RESET,
+			// Line up with the title's glyphs: the header's own padding, plus the 6px the
+			// title button insets its text by.
+			paddingLeft: `${(parseFloat(getComputedStyle(headerRow).paddingLeft) || 0) + 6}px`,
+			// The margin keeps the reservation intact (and stays correct when the line is
+			// empty); `top` does the tucking, so the scroller never creeps under the header.
+			marginTop: `${headerHeight}px`,
+			position: 'relative',
+			top: '-8px',
+			zIndex: '11', // above the header's gradient overlay
+		},
+		classes: { toggle: { 'text-text-500': true, 'bg-bg-100': false, '!px-2': false } },
+	};
+}
+
+// Hand the header-height reservation back to the scroll container. Needed when the view
+// stops being mobile (resize past the breakpoint, tablet rotation) - otherwise the offset
+// we moved onto our own element stays gone and the messages slide under the header.
+function clearMobileTitleAreaOffset(headerRow) {
+	const scroller = headerRow?.parentElement?.querySelector(':scope > .overflow-y-auto.overflow-x-hidden');
+	if (scroller?.style.marginTop) scroller.style.marginTop = '';
+}
+
+// How far the title's first glyph sits from the start of the title row.
+//
+// The title is a button that pokes out to the left with a negative offset and pads its text back
+// in, so its text does NOT start where the row does. Our line is a plain sibling with no such
+// padding, and used to hard-code 6px to match. claude.ai has since restyled that button - it now
+// sits 10px out with 10px of padding, i.e. an inset of 0 - so the constant became a 6px rightward
+// offset against the title. Measure it instead, and the alignment survives the next restyle.
+function getTitleTextInset(titleLine) {
+	const btn = titleLine?.querySelector('button');
+	if (!btn) return 0;
+	const wrapper = [...titleLine.children].find(child => child.contains(btn));
+	if (!wrapper) return 0;
+
+	const wrapperLeft = wrapper.getBoundingClientRect().left;
+	const btnRect = btn.getBoundingClientRect();
+	// Nothing is laid out yet (hidden tab, first paint) - 0 is the safe guess, and the anchor is
+	// recomputed on later passes anyway.
+	if (!btnRect.width) return 0;
+
+	const padding = parseFloat(getComputedStyle(btn).paddingLeft) || 0;
+	return Math.max(0, Math.round(btnRect.left + padding - wrapperLeft));
+}
+
 function getTitleAreaAnchor() {
 	const chatTitle = document.querySelector(SELECTORS.CHAT_MENU);
 	if (!chatTitle) return null;
@@ -625,29 +715,16 @@ function getTitleAreaAnchor() {
 	const headerRow = titleLine.parentElement;
 
 	if (isMobileView()) {
-		if (!headerRow) return null;
-		headerRow.classList.add('flex-wrap');
-
-		const headerPadding = parseFloat(getComputedStyle(headerRow).paddingLeft) || 0;
-		return {
-			parent: headerRow,
-			referenceNode: null,
-			styles: {
-				flexBasis: '100%',
-				marginTop: '-36px',
-				marginLeft: `-${headerPadding}px`,
-				paddingLeft: `${headerPadding + 8}px`,
-			},
-			classes: { add: ['bg-bg-100'], remove: ['!px-2'] },
-		};
+		return getMobileTitleAreaAnchor(headerRow);
 	} else {
+		clearMobileTitleAreaOffset(headerRow);
 		titleLine.classList.add('flex-wrap');
 
 		return {
 			parent: titleLine,
 			referenceNode: null,
-			styles: { flexBasis: '100%', paddingLeft: '6px' },
-			classes: {}
+			styles: { ...TITLE_AREA_STYLE_RESET, flexBasis: '100%', paddingLeft: `${getTitleTextInset(titleLine)}px` },
+			classes: { toggle: { 'text-text-500': true } }
 		};
 	}
 }
@@ -669,28 +746,16 @@ const pageLayouts = {
 				const headerRow = titleLine.parentElement;
 
 				if (isMobileView()) {
-					if (!headerRow) return null;
-					headerRow.classList.add('flex-wrap');
-					const headerPadding = parseFloat(getComputedStyle(headerRow).paddingLeft) || 0;
-					return {
-						parent: headerRow,
-						referenceNode: null,
-						styles: {
-							flexBasis: '100%',
-							marginTop: '-36px',
-							marginLeft: `-${headerPadding}px`,
-							paddingLeft: `${headerPadding + 8}px`,
-						},
-						classes: { add: ['bg-bg-100'], remove: ['!px-2'] },
-					};
+					return getMobileTitleAreaAnchor(headerRow);
 				} else {
+					clearMobileTitleAreaOffset(headerRow);
 					titleLine.classList.add('flex-wrap');
 
 					return {
 						parent: titleLine,
 						referenceNode: null,
-						styles: { flexBasis: '100%', paddingLeft: '6px' },
-						classes: {},
+						styles: { ...TITLE_AREA_STYLE_RESET, flexBasis: '100%', paddingLeft: `${getTitleTextInset(titleLine)}px` },
+						classes: { toggle: { 'text-text-500': true } },
 					};
 				}
 			},
@@ -787,16 +852,27 @@ const pageLayouts = {
 			sidebar: getSidebarRegularAnchor,
 			chatArea: getChatAreaRegularAnchor,
 			titleArea() {
-				const incognitoHeader = document.querySelector('.z-header .text-sm.select-none');
-				if (!incognitoHeader || incognitoHeader.textContent.trim() !== 'Incognito chat') return null;
-
-				const headerRow = incognitoHeader.parentElement;
-				headerRow.classList.add('flex-wrap');
+				// The label used to live under .z-header, which no longer exists - it now sits
+				// in a fixed title bar. Matched structurally rather than by its text: the layout
+				// is already gated on isIncognitoConversation(), so testing for "Incognito chat"
+				// bought nothing and broke in every locale but English.
+				const label = document.querySelector('.fixed.draggable > .text-sm.select-none');
+				if (!label) return null;
 
 				return {
-					parent: headerRow,
-					referenceNode: null,
-					styles: { flexBasis: '100%', paddingLeft: '8px', marginTop: '12px' },
+					insertAfter: label,
+					styles: {
+						...TITLE_AREA_STYLE_RESET,
+						// That bar is a fixed-height, nowrap flex row with room to spare, so sit
+						// inline beside the label instead of forcing a line it can't accommodate.
+						// min-width/overflow keep a long conversation from blowing the bar out.
+						minWidth: '0',
+						overflow: 'hidden',
+						whiteSpace: 'nowrap',
+					},
+					// Drop the muted class so the text inherits the bar's own colour - it themes
+					// independently of the page body.
+					classes: { toggle: { 'text-text-500': false, 'bg-bg-100': false } },
 				};
 			},
 		},
@@ -833,7 +909,11 @@ function mountToAnchor(element, anchor) {
 		needsInsert = element.nextElementSibling !== anchor.referenceNode
 			|| element.parentElement !== anchor.parent;
 	} else {
-		needsInsert = element.parentElement !== anchor.parent;
+		// A null referenceNode means "last child", so check for that and not merely for parentage.
+		// Renaming a conversation re-renders the header and React puts the title back BEFORE our
+		// line, which leaves us still a child of the right parent but now the first one - the stats
+		// render above the title until a reload. Comparing parents alone can't see that.
+		needsInsert = element.parentElement !== anchor.parent || element.nextElementSibling !== null;
 	}
 
 	if (needsInsert) {
@@ -853,50 +933,6 @@ function mountToAnchor(element, anchor) {
 		}
 	}
 	return true;
-}
-
-// Scrape the account email from the page DOM.
-// Scoped to likely account-info containers first, then falls back to full body.
-// Filters out common false-positive patterns (support@, noreply@, etc.).
-function scrapeEmailFromDOM() {
-	const EMAIL_REGEX = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
-	const EXCLUDED = /^(support|noreply|no-reply|help|admin|info|contact|security|abuse|postmaster|webmaster)@/i;
-
-	// Prefer scoped search: account menu elements likely to contain the user's email
-	const SELECTORS = [
-		'[data-testid="account-settings"]',
-		'[data-testid="settings-panel"]',
-		'[role="menu"]',
-		'[data-testid="org-settings"]',
-		'.settings-panel',
-		'nav',
-	];
-
-	const containers = [];
-	for (const sel of SELECTORS) {
-		try {
-			const els = document.querySelectorAll(sel);
-			els.forEach(el => containers.push(el));
-		} catch (_) { /* invalid selector, skip */ }
-	}
-	containers.push(document.body);
-
-	const seen = new Set();
-	for (const container of containers) {
-		const text = container.innerText || '';
-		const matches = text.match(EMAIL_REGEX);
-		if (!matches) continue;
-
-		for (const email of matches) {
-			const lower = email.toLowerCase();
-			if (seen.has(lower)) continue;
-			seen.add(lower);
-			if (!EXCLUDED.test(lower)) {
-				return email;
-			}
-		}
-	}
-	return null;
 }
 
 // Main initialization
@@ -932,17 +968,6 @@ async function initExtension() {
         await Log('Incognito mode: skipping sidebar anchor wait');
         sendBackgroundMessage({ type: 'requestData' });
         sendBackgroundMessage({ type: 'initOrg' });
-
-        // Scrape email even in incognito
-        const orgId = getActiveOrgId();
-        if (orgId) {
-            const scrapedEmail = scrapeEmailFromDOM();
-            if (scrapedEmail) {
-                await browser.storage.local.set({ [`accountEmail_${orgId}`]: scrapedEmail });
-                await Log('Scraped email from DOM (incognito):', scrapedEmail, 'for org:', orgId);
-            }
-        }
-
         await Log('Initialization complete. Ready to track tokens.');
         return;
     }
@@ -983,16 +1008,6 @@ async function initExtension() {
 	// Request initial data
 	sendBackgroundMessage({ type: 'requestData' });
 	sendBackgroundMessage({ type: 'initOrg' });
-
-	// Scrape account email from DOM and store for background fallback
-	const orgId = getActiveOrgId();
-	if (orgId) {
-		const scrapedEmail = scrapeEmailFromDOM();
-		if (scrapedEmail) {
-			await browser.storage.local.set({ [`accountEmail_${orgId}`]: scrapedEmail });
-			await Log('Scraped email from DOM:', scrapedEmail, 'for org:', orgId);
-		}
-	}
 
 	await Log('Initialization complete. Ready to track tokens.');
 }
