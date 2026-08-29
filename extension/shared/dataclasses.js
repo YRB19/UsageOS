@@ -12,6 +12,22 @@ export function isPeakHours() {
 	return hour >= 12 && hour < 18;
 }
 
+// Model family (Opus/Sonnet/...) for an API model ID; null if unrecognized.
+export function modelFamilyFromVersion(modelVersion) {
+	const slug = (modelVersion || '').toLowerCase();
+	return CONFIG.MODELS.find(family => slug.includes(family.toLowerCase())) || null;
+}
+
+// The model claude.ai's picker defaults to for this plan. Pass a null/unknown tier to get
+// the tier-agnostic fallback.
+export function defaultModelVersionForTier(subscriptionTier) {
+	return CONFIG.DEFAULT_MODEL_VERSION_BY_TIER[subscriptionTier] || CONFIG.DEFAULT_MODEL_VERSION;
+}
+
+export function defaultModelForTier(subscriptionTier) {
+	return modelFamilyFromVersion(defaultModelVersionForTier(subscriptionTier));
+}
+
 export class UsageData {
 	constructor(data = {}) {
 		// Each limit: { percentage, resetsAt } or null
@@ -153,9 +169,22 @@ export class UsageData {
 			.map(([key, limit]) => ({ key, ...limit }));
 	}
 
-	// Get limits that are at 100% (for notification scheduling)
-	getMaxedLimits() {
-		return this.getActiveLimits().filter(limit => limit.percentage >= 100);
+	// Get limits at or above the notification threshold (for notification scheduling)
+	getMaxedLimits(threshold = 100) {
+		return this.getActiveLimits().filter(limit => limit.percentage >= threshold);
+	}
+
+	// Does the server report nothing to draw? claude.ai stopped reporting limits on the free plan:
+	// /usage answers 200 with every field null and an empty `limits` array (verified 2026-08-22,
+	// including immediately after a message the completion stream *did* report usage for, so this
+	// is deliberate for free orgs rather than "no usage yet"). The UI shows a notice instead of an
+	// empty box.
+	//
+	// Not the same as `usageData === null`, which means "not fetched yet" - that stays blank.
+	// Extra usage counts as something to draw, so an account with credits but no plan limits keeps
+	// its credits bar rather than being told there is nothing.
+	hasNoReportedUsage() {
+		return this.getActiveLimits().length === 0 && !this.hasExtraUsageConfigured();
 	}
 
 	// For chat area: most constraining weekly-type limit (for marker)
@@ -193,7 +222,9 @@ export class UsageData {
 	// Get effective extra usage remaining (cents)
 	getExtraUsageRemaining() {
 		if (!this.extraUsage?.isEnabled) return null;
-		const monthlyRemaining = this.extraUsage.monthlyLimit - this.extraUsage.usedCredits;
+		// Clamped: usedCredits can overshoot monthlyLimit, and a negative remaining
+		// would push the displayed percentage past 100.
+		const monthlyRemaining = Math.max(0, this.extraUsage.monthlyLimit - this.extraUsage.usedCredits);
 		if (this.creditBalance === null) return monthlyRemaining;
 		return Math.min(monthlyRemaining, this.creditBalance);
 	}
@@ -205,9 +236,39 @@ export class UsageData {
 		return this.extraUsage.usedCredits + remaining;
 	}
 
+	// Can this account use extra usage at all? Free accounts can't buy credits,
+	// so they never get a credits bar regardless of what /usage reports.
+	canUseExtraUsage() {
+		return !!this.extraUsage?.isEnabled && this.subscriptionTier !== 'claude_free';
+	}
+
 	// Is extra usage active and available?
 	hasExtraUsage() {
-		return this.extraUsage?.isEnabled && this.getExtraUsageRemaining() > 0;
+		return this.canUseExtraUsage() && this.getExtraUsageRemaining() > 0;
+	}
+
+	// Is extra usage set up at all? Render gate for the credits bar — independent of
+	// remaining budget, so the bar stays visible (at 100%) once credits run out.
+	hasExtraUsageConfigured() {
+		return this.canUseExtraUsage() && this.getExtraUsageEffectiveTotal() > 0;
+	}
+
+	// Is this model funded by credits rather than by the plan? A model that is pay-per-use
+	// on the current tier has no plan-scoped weekly limit entry in /usage.
+	// Checked for Fable specifically: Sonnet legitimately has no sonnetWeekly entry on
+	// non-Max tiers (it's covered by the general weekly limit) and would be misclassified.
+	isModelCreditFunded(modelName) {
+		if (!modelName?.toLowerCase().includes('fable')) return false;
+		return this.limits.fableWeekly === null;
+	}
+
+	// Are messages for this model currently billed against credits rather than the plan?
+	// Either the model is inherently credit-funded, or the plan limits it draws on are maxed.
+	isSpendingCredits(modelName) {
+		if (!this.hasExtraUsageConfigured()) return false;
+		if (this.isModelCreditFunded(modelName)) return true;
+		return this.limits.session?.percentage >= 100 ||
+			this.getBindingWeeklyLimit(modelName)?.percentage >= 100;
 	}
 
 	toJSON() {
@@ -236,8 +297,10 @@ export class ConversationData {
 		this.uncachedCost = data.uncachedCost || 0;       // Without caching
 		this.futureCost = data.futureCost || 0; // Estimated cost of future messages
 		this.uncachedFutureCost = data.uncachedFutureCost || 0; // Estimated future cost without caching
-		this.model = data.model || CONFIG.DEFAULT_MODEL;
+		// Defensive only - the background always populates both before this is rehydrated
+		// from JSON, and it has a subscription tier available to pick a better default.
 		this.modelVersion = data.modelVersion || CONFIG.DEFAULT_MODEL_VERSION;
+		this.model = data.model || modelFamilyFromVersion(this.modelVersion);
 
 		// Cache status
 		this.costUsedCache = data.costUsedCache || false;	//Currently unused, since now we show future_cost rather than past cost
@@ -277,14 +340,14 @@ export class ConversationData {
 	getWeightedCost(modelOverride) {
 		let model = this.model;
 		if (modelOverride) model = modelOverride;
-		const weight = CONFIG.MODEL_WEIGHTS[model] || CONFIG.MODEL_WEIGHTS[CONFIG.DEFAULT_MODEL];
+		const weight = CONFIG.MODEL_WEIGHTS[model] ?? CONFIG.FALLBACK_MODEL_WEIGHT;
 		return Math.round(this.cost * weight);
 	}
 
 	getWeightedFutureCost(modelOverride, modelVersionOverride) {
 		let model = this.model;
 		if (modelOverride) model = modelOverride;
-		const weight = CONFIG.MODEL_WEIGHTS[model] || CONFIG.MODEL_WEIGHTS[CONFIG.DEFAULT_MODEL];
+		const weight = CONFIG.MODEL_WEIGHTS[model] ?? CONFIG.FALLBACK_MODEL_WEIGHT;
 		const baseCost = this.isCurrentlyCached(modelVersionOverride) ? this.futureCost : this.uncachedFutureCost;
 		return Math.round(baseCost * weight);
 	}
