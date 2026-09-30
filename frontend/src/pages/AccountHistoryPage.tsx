@@ -1,21 +1,98 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-  Tooltip,
-  CartesianGrid,
-} from 'recharts';
-import { ArrowLeft, Activity } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { ArrowLeft, Activity, Pencil, Calendar, Clock, Hourglass, Zap } from 'lucide-react';
 import { getAccounts, getSyncHistory } from '../lib/api';
-import type { AccountWithUsage, SyncEvent } from '../lib/types';
-import { LIMIT_LABELS, LIMIT_ORDER } from '../lib/types';
+import type { AccountWithUsage, SyncEvent, UsageLimit } from '../lib/types';
+import { Avatar } from '../components/Avatar';
+import { Ring } from '../components/Ring';
+import { Segmented } from '../components/Segmented';
+import { HistoryChart, type HistoryPoint } from '../components/HistoryChart';
 import { NotesTextarea } from '../components/NotesTextarea';
-import { formatCountdown, pctColor, effectivePct } from '../lib/utils';
+import { EditPanel } from '../components/EditPanel';
+import {
+  summarizeAccount,
+  usageColor,
+  effectivePct,
+  formatCountdown,
+  formatResetLine,
+} from '../lib/utils';
+
+type LimitType = 'session' | 'weekly';
+type RangeDays = 7 | 30;
+
+interface RingCardData {
+  hasLimit: boolean;
+  pct: number;
+  color: string;
+  active: boolean;
+  countdown: string | null;
+  resetsLine: string | null;
+}
+
+function ringData(limit: UsageLimit | undefined): RingCardData {
+  if (!limit) {
+    return { hasLimit: false, pct: 0, color: '#8E8E93', active: false, countdown: null, resetsLine: null };
+  }
+  const pct = effectivePct(limit.usage_pct ?? 0, limit.resets_at);
+  const active = !!limit.resets_at && new Date(limit.resets_at).getTime() > Date.now();
+  return {
+    hasLimit: true,
+    pct,
+    color: usageColor(pct),
+    active,
+    countdown: active ? formatCountdown(limit.resets_at) : null,
+    resetsLine: active ? formatResetLine(limit.resets_at) : null,
+  };
+}
+
+function RingCard({
+  title,
+  data,
+  ringIcon,
+  resetIcon,
+}: {
+  title: string;
+  data: RingCardData;
+  ringIcon?: ReactNode;
+  resetIcon?: ReactNode;
+}) {
+  return (
+    <div className="bg-card rounded-[20px] p-5 border border-black/[0.02] dark:border-white/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)]">
+      <div className="text-[13px] font-semibold text-foreground">{title}</div>
+      <div className="flex items-center gap-5 mt-4">
+        <Ring pct={data.pct} color={data.color} size={84} stroke={10} icon={ringIcon} />
+        <div className="min-w-0">
+          {data.hasLimit ? (
+            <>
+              <div
+                className="font-mono text-[32px] font-semibold leading-none tabular-nums"
+                style={{ color: data.color }}
+              >
+                {Math.round(data.pct)}%
+              </div>
+              {data.active ? (
+                <>
+                  <p className="flex items-center gap-1 text-[12px] text-muted mt-2 whitespace-nowrap">
+                    {resetIcon}
+                    <span>
+                      Resets in <span className="text-foreground/80">{data.countdown}</span>
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-muted mt-1 whitespace-nowrap">{data.resetsLine}</p>
+                </>
+              ) : (
+                <p className="text-[12px] text-muted mt-2 whitespace-nowrap">No active session</p>
+              )}
+            </>
+          ) : (
+            <p className="text-[13px] text-muted whitespace-nowrap">No data yet</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AccountHistoryPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,16 +101,19 @@ export default function AccountHistoryPage() {
   const [history, setHistory] = useState<SyncEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedLimit, setSelectedLimit] = useState<string>('session');
+  const [editOpen, setEditOpen] = useState(false);
+  const [limitType, setLimitType] = useState<LimitType>('session');
+  const [rangeDays, setRangeDays] = useState<RangeDays>(7);
+
+  const handleUpdated = (patch: Partial<AccountWithUsage>) => {
+    setAccount((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
 
   const fetchData = async () => {
     if (!id) return;
     try {
       setLoading(true);
-      const [accounts, events] = await Promise.all([
-        getAccounts(),
-        getSyncHistory(id, 0),
-      ]);
+      const [accounts, events] = await Promise.all([getAccounts(), getSyncHistory(id, 0)]);
       const found = accounts.find((a) => a.id === id);
       if (!found) {
         setError('Account not found');
@@ -53,95 +133,52 @@ export default function AccountHistoryPage() {
     fetchData();
   }, [id]);
 
-  const sortedLimits = useMemo(
-    () =>
-      [...(account?.limits || [])].sort((a, b) => {
-        const ai = LIMIT_ORDER.indexOf(a.limit_type);
-        const bi = LIMIT_ORDER.indexOf(b.limit_type);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      }),
-    [account?.limits]
-  );
+  const summary = account ? summarizeAccount(account) : null;
+  const statusColor = summary ? usageColor(summary.pct) : '#8E8E93';
+  const statusWord = summary ? (summary.atLimit ? 'At limit' : 'Available') : '';
 
-  const chartData = useMemo(
-    () =>
-      history
-        .filter(
-          (e) =>
-            e.limits?.[selectedLimit]?.usage_pct !== null &&
-            e.limits?.[selectedLimit]?.usage_pct !== undefined
-        )
-        .map((e) => ({
-          time: e.timestamp,
-          pct: e.limits![selectedLimit]!.usage_pct!,
-        })),
-    [history, selectedLimit]
-  );
+  const sessionData = ringData(account?.limits.find((l) => l.limit_type === 'session'));
+  const weeklyData = ringData(account?.limits.find((l) => l.limit_type === 'weekly'));
 
-  const currentLimit = sortedLimits.find((l) => l.limit_type === selectedLimit);
-  const currentPct = currentLimit ? effectivePct(currentLimit.usage_pct, currentLimit.resets_at) : 0;
-  const currentReset = currentLimit?.resets_at ?? null;
+  const points = useMemo<HistoryPoint[]>(() => {
+    if (!history) return [];
+    const cutoff = Date.now() - rangeDays * 86_400_000;
+    return history
+      .map((e) => {
+        const v = e.limits?.[limitType];
+        if (v === null || v === undefined || v.usage_pct === null || v.usage_pct === undefined) {
+          return null;
+        }
+        return { time: new Date(e.timestamp).getTime(), pct: v.usage_pct };
+      })
+      .filter((p): p is HistoryPoint => p !== null && p.time >= cutoff)
+      .sort((a, b) => a.time - b.time);
+  }, [history, limitType, rangeDays]);
 
-  const maxPct = account?.limits?.length
-    ? Math.max(...account.limits.map((l) => effectivePct(l.usage_pct, l.resets_at)))
-    : 0;
-
-  const statusColor =
-    maxPct >= 100
-      ? 'text-accent-highlight'
-      : maxPct >= 80
-        ? 'text-accent-primary'
-        : 'text-[#22c55e]';
-  const statusLabel = maxPct >= 100 ? 'At limit' : maxPct >= 80 ? 'High' : 'Active';
-
-  function CustomTooltip({
-    active,
-    payload,
-  }: {
-    active?: boolean;
-    payload?: Array<{ value: number; payload: { time: string } }>;
-  }) {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="glass rounded-lg px-2.5 py-1 text-[11px] font-mono text-foreground/80 shadow-lg">
-        {payload[0].value.toFixed(1)}%
-        <br />
-        <span className="text-[10px] opacity-60">
-          {new Date(payload[0].payload.time).toLocaleString([], {
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-          })}
-        </span>
-      </div>
-    );
-  }
+  const currentLimit = account?.limits.find((l) => l.limit_type === limitType);
+  const lineColor = currentLimit
+    ? usageColor(effectivePct(currentLimit.usage_pct ?? 0, currentLimit.resets_at))
+    : '#8E8E93';
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-border/50 border-t-accent-primary rounded-full animate-spin" />
-          <p className="text-[12px] text-muted/40">Loading history...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-border/50 border-t-accent-primary rounded-full animate-spin" />
       </div>
     );
   }
 
-  if (error || !account) {
+  if (error || !account || !summary) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center px-4">
         <div className="text-center">
           <Activity className="w-12 h-12 mx-auto mb-4 text-accent-highlight/50" />
-          <h2 className="text-lg font-semibold text-foreground/80 mb-2">
-            {error || 'Account not found'}
-          </h2>
+          <h2 className="text-lg font-semibold text-foreground mb-2">{error || 'Account not found'}</h2>
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => navigate('/')}
-            className="mt-4 px-4 py-2 rounded-lg bg-accent-primary/10 border border-accent-primary/20 text-accent-primary text-[13px] font-medium hover:bg-accent-primary/20 transition-colors"
+            className="mt-4 px-4 py-2 rounded-[10px] bg-accent-primary/10 border border-accent-primary/20 text-accent-primary text-[13px] font-medium hover:bg-accent-primary/20 transition-colors"
           >
             Back to Dashboard
           </motion.button>
@@ -150,201 +187,107 @@ export default function AccountHistoryPage() {
     );
   }
 
+  const displayName = account.nickname || account.email || 'Unknown';
+  const syncedLabel =
+    summary.syncedAgo === null
+      ? null
+      : `${summary.stale ? 'Last synced' : 'Synced'} ${
+          summary.syncedAgo === 'just now' ? 'just now' : `${summary.syncedAgo} ago`
+        }`;
+
   return (
-    <div className="min-h-screen bg-background flex items-start justify-center py-12 px-4 sm:px-6 lg:px-8">
-      {/* Single centered card containing all detail content */}
+    <div className="min-h-screen">
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="glass rounded-xl overflow-hidden w-full max-w-3xl"
-        style={{
-          borderLeft: `3px solid ${account.color}`,
-        }}
+        transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+        className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 pt-10 pb-16"
       >
-        <div className="p-5">
-          {/* Back Button + Header */}
-          <div className="flex items-center gap-4 mb-6">
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => navigate('/')}
-              className="flex items-center gap-2 text-muted/60 hover:text-foreground transition-colors flex-shrink-0"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span className="text-sm font-medium">Back</span>
-            </motion.button>
-            <div className="flex-1 flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden" style={{ backgroundColor: account.color }}>
-                <img src="/icon128.png" alt="" className="w-6 h-6 object-contain" />
-              </div>
-              <div className="min-w-0">
-                <h1 className="text-base font-semibold text-foreground truncate">{account.nickname || account.email || 'Unknown'}</h1>
-                <p className="text-[11px] text-muted/60 truncate">{account.email || account.org_id}</p>
-              </div>
-            </div>
-          </div>
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-1.5 text-[13px] font-medium text-muted hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Accounts
+        </button>
 
-          {/* Current Stats */}
-          <div className="mb-6" style={{ borderLeft: `3px solid ${account.color}` }}>
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className={`font-medium ${statusColor}`}>{statusLabel}</span>
-                  {account.subscription_tier && (
-                    <span className="text-[10px] font-mono text-muted/40 uppercase tracking-wider border border-border/40 rounded px-1.5 py-0.5">
-                      {account.subscription_tier.replace('claude_', '')}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] font-mono text-muted/30 mt-0.5">{account.org_id}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <p className="text-2xl font-mono font-bold text-foreground">{currentPct.toFixed(1)}%</p>
-                  <p className="text-[11px] text-muted/50">Current {LIMIT_LABELS[selectedLimit] || selectedLimit}</p>
-                </div>
-                {currentReset && (
-                  <div className="text-right">
-                    <p className="text-[11px] font-mono text-muted/60">Resets</p>
-                    <p className="text-[11px] font-mono text-foreground/80">{formatCountdown(currentReset)}</p>
-                  </div>
-                )}
-              </div>
+        <div className="flex items-start gap-4 mt-6">
+          <Avatar name={displayName} color={account.color} avatarUrl={account.avatar_url} size={44} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[17px] font-semibold text-foreground truncate">{displayName}</span>
+              <span className="text-[13px] font-medium" style={{ color: statusColor }}>
+                {statusWord}
+              </span>
+              <button
+                onClick={() => setEditOpen(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded-[8px] text-[11px] font-medium text-muted hover:text-foreground border border-border/70 hover:border-border transition-colors"
+              >
+                <Pencil className="w-3 h-3" />
+                Edit
+              </button>
             </div>
-
-            {/* Limit Selector */}
-            <div className="flex flex-wrap gap-2">
-              {sortedLimits.map((limit) => (
-                <motion.button
-                  key={limit.limit_type}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setSelectedLimit(limit.limit_type)}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 ${
-                    selectedLimit === limit.limit_type
-                      ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/30'
-                      : 'text-muted/60 hover:text-muted/80 hover:bg-white/5'
-                  }`}
-                >
-                  {LIMIT_LABELS[limit.limit_type] || limit.limit_type}
-                  <span className={`ml-1.5 font-mono ${pctColor(effectivePct(limit.usage_pct, limit.resets_at))}`}>
-                    {effectivePct(limit.usage_pct, limit.resets_at).toFixed(1)}%
-                  </span>
-                </motion.button>
-              ))}
-            </div>
-          </div>
-
-          {/* History Chart */}
-          <div className="mb-6">
-            <h3 className="text-sm font-semibold text-foreground/80 mb-4">Usage History — {LIMIT_LABELS[selectedLimit] || selectedLimit}</h3>
-            
-            {chartData.length < 2 ? (
-              <div className="h-[300px] flex items-center justify-center text-muted/40">
-                <div className="text-center">
-                  <Activity className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-[13px]">Not enough data points for history chart</p>
-                  <p className="text-[11px] opacity-50 mt-1">{chartData.length} data point{chartData.length !== 1 ? 's' : ''} available</p>
-                </div>
-              </div>
-            ) : (
-              <div className="h-[350px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" strokeOpacity={0.3} />
-                    <XAxis
-                      dataKey="time"
-                      tickFormatter={(value) =>
-                        new Date(value).toLocaleString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })
-                      }
-                      tick={{ fontSize: 11, fill: '#a7a9be' }}
-                      tickMargin={8}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fontSize: 11, fill: '#a7a9be' }}
-                      tickFormatter={(value) => `${value}%`}
-                      tickMargin={8}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Line
-                      type="monotone"
-                      dataKey="pct"
-                      stroke="#ff8906"
-                      strokeWidth={2}
-                      dot={false}
-                      activeDot={{
-                        r: 4,
-                        fill: '#ff8906',
-                        stroke: '#0f0e17',
-                        strokeWidth: 2,
-                      }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+            {account.email && (
+              <p className="text-[12px] text-muted mt-1 break-all">{account.email}</p>
             )}
           </div>
+          {syncedLabel && (
+            <span className="text-[11px] text-muted whitespace-nowrap pt-1">{syncedLabel}</span>
+          )}
+        </div>
 
-          {/* All Limits Mini Charts */}
-          <div className="mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {sortedLimits.map((limit) => (
-                <div
-                  key={limit.limit_type}
-                  className="glass rounded-xl p-4"
-                  style={{ borderLeft: `3px solid ${account.color}` }}
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-medium text-muted">{LIMIT_LABELS[limit.limit_type] || limit.limit_type}</span>
-                    <span className={`text-lg font-mono font-bold ${pctColor(effectivePct(limit.usage_pct, limit.resets_at))}`}>
-                      {effectivePct(limit.usage_pct, limit.resets_at).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="h-20">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={history
-                          .filter((e) => e.limits?.[limit.limit_type]?.usage_pct !== null && e.limits?.[limit.limit_type]?.usage_pct !== undefined)
-                          .map((e) => ({ time: e.timestamp, pct: e.limits![limit.limit_type]!.usage_pct! }))
-                        }
-                      >
-                        <YAxis domain={[0, 100]} hide />
-                        <Line
-                          type="monotone"
-                          dataKey="pct"
-                          stroke={pctColor(limit.usage_pct)}
-                          strokeWidth={1.5}
-                          dot={false}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                  {limit.resets_at && (
-                    <p className="text-[10px] font-mono text-muted/40 mt-2 text-right">
-                      resets in {formatCountdown(limit.resets_at)}
-                    </p>
-                  )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-8">
+          <RingCard
+            title="Session Quota"
+            data={sessionData}
+            ringIcon={<Zap className="w-[18px] h-[18px] text-muted/60" />}
+            resetIcon={<Clock className="w-3.5 h-3.5 text-muted/70 flex-shrink-0" />}
+          />
+          <RingCard
+            title="Weekly Quota"
+            data={weeklyData}
+            ringIcon={<Calendar className="w-[18px] h-[18px] text-muted/60" />}
+            resetIcon={<Hourglass className="w-3.5 h-3.5 text-muted/70 flex-shrink-0" />}
+          />
+        </div>
+
+        <div className="flex flex-col lg:flex-row gap-6 mt-6">
+          <div className="flex-1 min-w-0 bg-card rounded-[20px] p-5 border border-black/[0.02] dark:border-white/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)]">
+            <div className="flex items-center gap-3 flex-wrap">
+              <Segmented
+                id="limit-type"
+                options={['Session', 'Weekly'] as const}
+                value={limitType === 'session' ? 'Session' : 'Weekly'}
+                onChange={(v) => setLimitType(v === 'Weekly' ? 'weekly' : 'session')}
+              />
+              <Segmented
+                id="range"
+                options={['7d', '30d'] as const}
+                value={rangeDays === 7 ? '7d' : '30d'}
+                onChange={(v) => setRangeDays(v === '30d' ? 30 : 7)}
+              />
+            </div>
+            <div className="mt-4 h-[280px]">
+              {points.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-[13px] text-muted">Your history will appear after the first sync</p>
                 </div>
-              ))}
+              ) : (
+                <HistoryChart points={points} color={lineColor} />
+              )}
             </div>
           </div>
 
-          {/* Notes Section */}
-          <div className="border-t border-border/30 pt-3 pb-2">
-            <NotesTextarea
-              accountId={account.id}
-              initialContent={account.note || ''}
-            />
+          <div className="w-full lg:w-64 flex-shrink-0 bg-card rounded-[20px] p-5 border border-black/[0.02] dark:border-white/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)] flex flex-col">
+            <span className="text-[13px] font-semibold text-foreground">Notes</span>
+            <div className="flex-1 min-h-[260px] mt-2">
+              <NotesTextarea accountId={account.id} initialContent={account.note || ''} />
+            </div>
           </div>
         </div>
       </motion.div>
+
+      <EditPanel open={editOpen} onClose={() => setEditOpen(false)} account={account} onUpdated={handleUpdated} />
     </div>
   );
 }
