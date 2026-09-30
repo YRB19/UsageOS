@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
@@ -21,7 +22,7 @@ MAINTENANCE_NOTE_KEY = "maintenance_note"
 @router.get("/note", response_model=MaintenanceNoteOut)
 async def get_maintenance_note(db: Session = Depends(get_sync_db)):
     note = db.execute(
-        "SELECT value, updated_at FROM settings WHERE key = :key",
+        text("SELECT value, updated_at FROM settings WHERE key = :key"),
         {"key": MAINTENANCE_NOTE_KEY}
     ).first()
     if note:
@@ -32,11 +33,11 @@ async def get_maintenance_note(db: Session = Depends(get_sync_db)):
 async def put_maintenance_note(body: MaintenanceNoteIn, db: Session = Depends(get_sync_db)):
     now = datetime.utcnow()
     result = db.execute(
-        """
+        text("""
         INSERT INTO settings (key, value, updated_at) VALUES (:key, :value, :updated_at)
         ON CONFLICT (key) DO UPDATE SET value = :value, updated_at = :updated_at
         RETURNING value, updated_at
-        """,
+        """),
         {"key": MAINTENANCE_NOTE_KEY, "value": body.content, "updated_at": now}
     ).first()
     db.commit()

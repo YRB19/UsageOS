@@ -1,116 +1,140 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { LineChart, Line, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
-import { ChevronDown, ChevronUp } from 'lucide-react';
-import { getSyncHistory } from '../lib/api';
-import type { SyncEvent } from '../lib/types';
+import { useEffect, useRef } from 'react';
+import { Chart, registerables, type ScriptableContext } from 'chart.js';
+import 'chartjs-adapter-date-fns';
+import { formatChartDateLabel, formatFullDateTime } from '../lib/utils';
+
+Chart.register(...registerables);
+
+export interface HistoryPoint {
+  time: number;
+  pct: number;
+}
 
 interface HistoryChartProps {
-  accountId: string;
+  points: HistoryPoint[];
+  color: string;
 }
 
-function CustomTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ value: number }>;
-}) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="glass rounded-lg px-2.5 py-1 text-[11px] font-mono text-foreground/80 shadow-lg">
-      {payload[0].value.toFixed(1)}%
-    </div>
-  );
+function cssColor(name: string, alpha?: number): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (!raw) return '#8E8E93';
+  return alpha === undefined ? `rgb(${raw})` : `rgb(${raw} / ${alpha})`;
 }
 
-export function HistoryChart({ accountId }: HistoryChartProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [data, setData] = useState<{ time: string; pct: number }[]>([]);
-  const [loading, setLoading] = useState(false);
+function withAlpha(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function HistoryChart({ points, color }: HistoryChartProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const chartRef = useRef<Chart | null>(null);
 
   useEffect(() => {
-    if (!expanded || data.length > 0) return;
-    setLoading(true);
-    getSyncHistory(accountId, 50)
-      .then((events: SyncEvent[]) => {
-        const points = events
-          .filter(
-            (e) =>
-              e.limits?.session?.usage_pct !== null &&
-              e.limits?.session?.usage_pct !== undefined
-          )
-          .reverse()
-          .map((e) => ({
-            time: e.timestamp,
-            pct: e.limits.session!.usage_pct!,
-          }));
-        setData(points);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [expanded, accountId, data.length]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-  return (
-    <div>
-      <motion.button
-        whileTap={{ scale: 0.98 }}
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[11px] text-muted/40 hover:text-muted/70 transition-colors duration-200"
-      >
-        {expanded ? (
-          <ChevronUp className="w-3 h-3" />
-        ) : (
-          <ChevronDown className="w-3 h-3" />
-        )}
-        {expanded ? 'Hide' : 'History'}
-      </motion.button>
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: { datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'nearest', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            displayColors: false,
+            backgroundColor: cssColor('--card'),
+            borderColor: cssColor('--divider', 0.6),
+            borderWidth: 1,
+            titleColor: cssColor('--text'),
+            bodyColor: cssColor('--text-secondary'),
+            titleFont: { family: 'Inter Variable', size: 11 },
+            bodyFont: { family: 'Inter Variable', size: 12 },
+            padding: 10,
+            cornerRadius: 8,
+            callbacks: {
+              title: (items) => formatFullDateTime(Number(items[0].parsed.x)),
+              label: (item) => {
+                const y = (item.parsed as { y: number | null }).y;
+                return y === null ? '' : `${y.toFixed(1)}%`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'time',
+            time: {
+              unit: 'day',
+              tooltipFormat: 'PPPP',
+            },
+            grid: { display: false },
+            ticks: {
+              source: 'auto',
+              maxTicksLimit: 5,
+              maxRotation: 0,
+              color: cssColor('--text-secondary'),
+              font: { family: 'Inter Variable', size: 11 },
+              callback: (value) => formatChartDateLabel(Number(value)),
+            },
+          },
+          y: {
+            min: 0,
+            max: 115,
+            beginAtZero: true,
+            ticks: {
+              stepSize: 50,
+              callback: (value) => `${Number(value)}%`,
+              color: cssColor('--text-secondary'),
+              font: { family: 'Inter Variable', size: 11 },
+            },
+            grid: {
+              color: cssColor('--divider', 0.5),
+            },
+            border: { display: false },
+          },
+        },
+      },
+    });
 
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-            className="overflow-hidden"
-          >
-            <div className="mt-2">
-              {loading ? (
-                <div className="h-[72px] flex items-center justify-center">
-                  <div className="w-4 h-4 border border-border/50 border-t-accent-primary rounded-full animate-spin" />
-                </div>
-              ) : data.length < 2 ? (
-                <div className="h-[72px] flex items-center justify-center text-[11px] text-muted/30">
-                  Not enough data yet
-                </div>
-              ) : (
-                <div className="h-[72px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={data}>
-                      <YAxis domain={[0, 100]} hide />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Line
-                        type="monotone"
-                        dataKey="pct"
-                        stroke="#ff8906"
-                        strokeWidth={1.5}
-                        dot={false}
-                        activeDot={{
-                          r: 3,
-                          fill: '#ff8906',
-                          stroke: '#0f0e17',
-                          strokeWidth: 2,
-                        }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
+    chartRef.current = chart;
+    return () => {
+      chart.destroy();
+      chartRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.data.datasets = [
+      {
+        data: points.map((p) => ({ x: p.time, y: p.pct })),
+        borderColor: color,
+        backgroundColor: withAlpha(color, 0.06),
+        borderWidth: 2,
+        stepped: 'before',
+        tension: 0,
+        fill: true,
+        pointRadius: (ctx: ScriptableContext<'line'>) => {
+          const data = ctx.chart.data.datasets[0]?.data;
+          return data && ctx.dataIndex === data.length - 1 ? 4 : 0;
+        },
+        pointBackgroundColor: color,
+        pointBorderColor: cssColor('--card'),
+        pointBorderWidth: 2,
+        pointHoverRadius: 4,
+        pointHitRadius: 12,
+      },
+    ];
+    chart.update();
+  }, [points, color]);
+
+  return <canvas ref={canvasRef} />;
 }
