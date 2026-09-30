@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  darkMode: ['class'],
+  darkMode: 'media',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,22 +8,23 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        background: '#0f0e17',
-        foreground: '#fffffe',
-        card: '#1f2937',
-        border: '#374151',
-        muted: '#a7a9be',
+        background: 'rgb(var(--canvas) / <alpha-value>)',
+        foreground: 'rgb(var(--text) / <alpha-value>)',
+        card: 'rgb(var(--card) / <alpha-value>)',
+        border: 'rgb(var(--divider) / <alpha-value>)',
+        muted: 'rgb(var(--text-secondary) / <alpha-value>)',
         accent: {
-          primary: '#ff8906',
-          highlight: '#f25f4c',
-          secondary: '#e53170',
+          primary: 'rgb(var(--accent) / <alpha-value>)',
+          highlight: '#FF453A',
+          secondary: '#FF9500',
         },
       },
       borderRadius: {
         xl: '0.75rem',
       },
       fontFamily: {
-        sans: ['Inter', 'sans-serif'],
+        sans: ['Inter Variable', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       keyframes: {
         'fade-in': {
