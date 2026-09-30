@@ -48,15 +48,14 @@ export function NotesTextarea({ accountId, initialContent }: NotesTextareaProps)
   };
 
   return (
-    <div className="relative group/note">
+    <div className="relative group/note h-full">
       <textarea
         value={content}
         onChange={handleChange}
         onClick={(e) => e.stopPropagation()}
         onFocus={(e) => e.stopPropagation()}
         placeholder="Add a note..."
-        rows={2}
-        className="w-full bg-transparent text-[12px] text-muted/70 placeholder-muted/25 resize-none outline-none leading-relaxed group-hover/note:text-muted/90 transition-colors duration-200"
+        className="w-full h-full bg-transparent text-[13px] text-muted placeholder-muted/40 resize-none outline-none leading-relaxed transition-colors duration-200"
       />
       <AnimatePresence>
         {saved && (
