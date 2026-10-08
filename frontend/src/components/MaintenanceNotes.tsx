@@ -82,6 +82,7 @@ function relativeUpdated(iso: string | null): string | null {
 export function MaintenanceNotes() {
   const [content, setContent] = useState('');
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -194,13 +195,17 @@ export function MaintenanceNotes() {
           const res = await putMaintenanceNote(val);
           if (mountedRef.current) {
             setUpdatedAt(res.updated_at);
+            setSaveError(false);
             setSaved(true);
             setTimeout(() => {
               if (mountedRef.current) setSaved(false);
             }, 1500);
           }
         } catch {
-          /* ignore */
+          if (mountedRef.current) {
+            setSaved(false);
+            setSaveError(true);
+          }
         }
       }, 600);
     },
@@ -409,11 +414,23 @@ export function MaintenanceNotes() {
               </svg>
             </div>
           )}
-          {footerText && (
+          {(footerText || saved || saveError) && (
             <div className="flex items-center justify-between gap-2 mt-2">
               <span className="text-[10px] opacity-60">{footerText}</span>
               <span className="flex items-center gap-1.5">
                 <AnimatePresence>
+                  {saveError && (
+                    <motion.span
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="text-[10px] font-medium"
+                      style={{ color: '#B3261E' }}
+                    >
+                      Couldn&apos;t save
+                    </motion.span>
+                  )}
                   {saved && (
                     <motion.span
                       initial={{ opacity: 0, y: 4 }}
