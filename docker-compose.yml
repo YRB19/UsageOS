@@ -45,6 +45,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_API_KEY: ${VITE_API_KEY}
     container_name: usageos-frontend
     ports:
       - "3000:80"
