@@ -13,9 +13,7 @@ import { EditPanel } from '../components/EditPanel';
 import {
   summarizeAccount,
   usageColor,
-  effectivePct,
-  formatCountdown,
-  formatResetLine,
+  limitDisplay,
 } from '../lib/utils';
 
 type LimitType = 'session' | 'weekly';
@@ -30,19 +28,15 @@ interface RingCardData {
   resetsLine: string | null;
 }
 
-function ringData(limit: UsageLimit | undefined): RingCardData {
-  if (!limit) {
-    return { hasLimit: false, pct: 0, color: '#8E8E93', active: false, countdown: null, resetsLine: null };
-  }
-  const pct = effectivePct(limit.usage_pct ?? 0, limit.resets_at);
-  const active = !!limit.resets_at && new Date(limit.resets_at).getTime() > Date.now();
+function ringData(limits: UsageLimit[] | undefined, limitType: string): RingCardData {
+  const d = limitDisplay(limits, limitType);
   return {
-    hasLimit: true,
-    pct,
-    color: usageColor(pct),
-    active,
-    countdown: active ? formatCountdown(limit.resets_at) : null,
-    resetsLine: active ? formatResetLine(limit.resets_at) : null,
+    hasLimit: d.exists,
+    pct: d.pct,
+    color: usageColor(d.pct),
+    active: d.active,
+    countdown: d.resetText,
+    resetsLine: d.resetsLine,
   };
 }
 
@@ -51,11 +45,13 @@ function RingCard({
   data,
   ringIcon,
   resetIcon,
+  emptyLabel = 'No data yet',
 }: {
   title: string;
   data: RingCardData;
   ringIcon?: ReactNode;
   resetIcon?: ReactNode;
+  emptyLabel?: string;
 }) {
   return (
     <div className="bg-card rounded-[20px] p-5 border border-black/[0.02] dark:border-white/[0.06] shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)]">
@@ -63,30 +59,26 @@ function RingCard({
       <div className="flex items-center gap-5 mt-4">
         <Ring pct={data.pct} color={data.color} size={84} stroke={10} icon={ringIcon} />
         <div className="min-w-0">
-          {data.hasLimit ? (
+          <div
+            className="font-mono text-[32px] font-semibold leading-none tabular-nums"
+            style={{ color: data.color }}
+          >
+            {Math.round(data.pct)}%
+          </div>
+          {data.active ? (
             <>
-              <div
-                className="font-mono text-[32px] font-semibold leading-none tabular-nums"
-                style={{ color: data.color }}
-              >
-                {Math.round(data.pct)}%
-              </div>
-              {data.active ? (
-                <>
-                  <p className="flex items-center gap-1 text-[12px] text-muted mt-2 whitespace-nowrap">
-                    {resetIcon}
-                    <span>
-                      Resets in <span className="text-foreground/80">{data.countdown}</span>
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-muted mt-1 whitespace-nowrap">{data.resetsLine}</p>
-                </>
-              ) : (
-                <p className="text-[12px] text-muted mt-2 whitespace-nowrap">No active session</p>
-              )}
+              <p className="flex items-center gap-1 text-[12px] text-muted mt-2 whitespace-nowrap">
+                {resetIcon}
+                <span>
+                  Resets in <span className="text-foreground/80">{data.countdown}</span>
+                </span>
+              </p>
+              <p className="text-[11px] text-muted mt-1 whitespace-nowrap">{data.resetsLine}</p>
             </>
           ) : (
-            <p className="text-[13px] text-muted whitespace-nowrap">No data yet</p>
+            <p className="text-[12px] text-muted mt-2 whitespace-nowrap">
+              {data.hasLimit ? 'No active session' : emptyLabel}
+            </p>
           )}
         </div>
       </div>
@@ -137,8 +129,8 @@ export default function AccountHistoryPage() {
   const statusColor = summary ? usageColor(summary.pct) : '#8E8E93';
   const statusWord = summary ? (summary.atLimit ? 'At limit' : 'Available') : '';
 
-  const sessionData = ringData(account?.limits.find((l) => l.limit_type === 'session'));
-  const weeklyData = ringData(account?.limits.find((l) => l.limit_type === 'weekly'));
+  const sessionData = ringData(account?.limits, 'session');
+  const weeklyData = ringData(account?.limits, 'weekly');
 
   const points = useMemo<HistoryPoint[]>(() => {
     if (!history) return [];
@@ -155,10 +147,8 @@ export default function AccountHistoryPage() {
       .sort((a, b) => a.time - b.time);
   }, [history, limitType, rangeDays]);
 
-  const currentLimit = account?.limits.find((l) => l.limit_type === limitType);
-  const lineColor = currentLimit
-    ? usageColor(effectivePct(currentLimit.usage_pct ?? 0, currentLimit.resets_at))
-    : '#8E8E93';
+  const currentLimit = limitDisplay(account?.limits, limitType);
+  const lineColor = currentLimit.exists ? usageColor(currentLimit.pct) : '#8E8E93';
 
   if (loading) {
     return (
@@ -240,6 +230,7 @@ export default function AccountHistoryPage() {
           <RingCard
             title="Session Quota"
             data={sessionData}
+            emptyLabel="No active session"
             ringIcon={<Zap className="w-[18px] h-[18px] text-muted/60" />}
             resetIcon={<Clock className="w-3.5 h-3.5 text-muted/70 flex-shrink-0" />}
           />
