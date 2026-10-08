@@ -52,6 +52,41 @@ export function usageColor(pct: number): string {
   return '#007AFF';
 }
 
+export interface LimitDisplay {
+  exists: boolean;
+  pct: number;
+  active: boolean;
+  resetText: string | null;
+  resetsLine: string | null;
+}
+
+export function findLimit(
+  limits: UsageLimit[] | undefined | null,
+  limitType: string
+): UsageLimit | undefined {
+  if (!limits) return undefined;
+  return limits.find((l) => l.limit_type === limitType);
+}
+
+export function limitDisplay(
+  limits: UsageLimit[] | undefined | null,
+  limitType: string
+): LimitDisplay {
+  const limit = findLimit(limits, limitType);
+  if (!limit) {
+    return { exists: false, pct: 0, active: false, resetText: null, resetsLine: null };
+  }
+  const pct = effectivePct(limit.usage_pct ?? 0, limit.resets_at);
+  const active = !!limit.resets_at && new Date(limit.resets_at).getTime() > Date.now();
+  return {
+    exists: true,
+    pct,
+    active,
+    resetText: active ? formatCountdown(limit.resets_at) : null,
+    resetsLine: active ? formatResetLine(limit.resets_at) : null,
+  };
+}
+
 export function formatResetLine(resetsAt: string | null): string {
   if (!resetsAt) return '';
   const d = new Date(resetsAt);
@@ -113,22 +148,13 @@ function latestSync(limits: UsageLimit[]): { ms: number; ago: string } | null {
 }
 
 export function summarizeAccount(account: AccountWithUsage): CardSummary {
-  const session = account.limits.find((l) => l.limit_type === 'session');
-  const weekly = account.limits.find((l) => l.limit_type === 'weekly');
+  const session = limitDisplay(account.limits, 'session');
+  const weekly = limitDisplay(account.limits, 'weekly');
 
-  const eff = (l: UsageLimit) => effectivePct(l.usage_pct ?? 0, l.resets_at);
-
-  const pct = session
-    ? eff(session)
-    : account.limits.length > 0
-      ? Math.max(...account.limits.map(eff))
-      : 0;
+  const pct = session.exists ? session.pct : 0;
 
   const clamped = Math.max(0, Math.min(100, pct));
-  const resetText =
-    session && session.resets_at && new Date(session.resets_at).getTime() > Date.now()
-      ? formatCountdown(session.resets_at)
-      : null;
+  const resetText = session.resetText;
   const sync = latestSync(account.limits);
 
   return {
@@ -136,7 +162,7 @@ export function summarizeAccount(account: AccountWithUsage): CardSummary {
     atLimit: clamped >= 100,
     sessionActive: resetText !== null,
     resetText,
-    weeklyPct: weekly ? eff(weekly) : null,
+    weeklyPct: weekly.exists ? weekly.pct : null,
     syncedAgo: sync ? sync.ago : null,
     stale: sync !== null && Date.now() - sync.ms > DAY_MS,
   };
