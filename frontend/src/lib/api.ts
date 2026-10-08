@@ -12,10 +12,18 @@ export async function putMaintenanceNote(content: string): Promise<MaintenanceNo
 }
 
 const baseURL = import.meta.env.VITE_API_URL || '/api';
+const apiKey: string | undefined = import.meta.env.VITE_API_KEY;
 
 export const api = axios.create({
   baseURL,
   headers: { 'Content-Type': 'application/json' },
+});
+
+api.interceptors.request.use((config) => {
+  if (apiKey) {
+    config.headers.Authorization = `Bearer ${apiKey}`;
+  }
+  return config;
 });
 
 export async function getAccounts(): Promise<AccountWithUsage[]> {
