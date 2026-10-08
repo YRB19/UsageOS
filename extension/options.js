@@ -71,7 +71,11 @@ async function testConnection() {
 	try {
 		const response = await browser.runtime.sendMessage({ type: 'atlasTestConnection' });
 		if (response?.ok) {
-			showStatus('Connection successful!', 'success');
+			showStatus(`Connection successful (HTTP ${response?.status ?? 200})`, 'success');
+		} else if (response?.reason === 'not_configured') {
+			showStatus('Connection failed: server URL or API key not saved yet', 'error');
+		} else if (response?.status) {
+			showStatus(`Connection failed: HTTP ${response.status}`, 'error');
 		} else {
 			showStatus(`Connection failed: ${response?.reason || 'Unknown error'}`, 'error');
 		}
