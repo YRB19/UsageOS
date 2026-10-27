@@ -1,334 +1,246 @@
 # UsageOS
 
-**Self-hosted multi-account Claude.ai usage tracking platform.** Track token usage across multiple Claude.ai accounts with a Chrome extension, view analytics in a React dashboard, and receive limit-reset notifications via Telegram.
+**A self-hosted dashboard for tracking usage across multiple Claude.ai accounts.**
 
-## Architecture Overview
+Claude's built-in usage indicator only shows the account you're currently logged into. If you juggle several accounts (personal, work, per-project), you end up logging in and out just to check how much you have left. UsageOS fixes that: a Chrome extension quietly records usage from every account you use, and a web dashboard shows all of them side by side, with reset countdowns, notes, history charts and Telegram alerts.
 
-```
-┌─────────────────┐     HTTPS      ┌──────────────┐
-│  Chrome Ext.    │ ─────────────▶ │  FastAPI     │
-│  (MV3, vanilla) │  Sync + API    │  + PostgreSQL│
-└─────────────────┘                └──────┬───────┘
-                                          │
-                    ┌─────────────────────┼─────────────────────┐
-                    ▼                     ▼                     ▼
-             ┌──────────────┐      ┌──────────────┐     ┌──────────────┐
-             │  React       │      │  Extension   │     │  Telegram    │
-             │  Dashboard   │      │  Dashboard   │     │  Bot         │
-             │  (React/Vite)│      │  (HTML/JS)   │     │  (Webhook)   │
-             └──────────────┘      └──────────────┘     └──────────────┘
-```
+- **All accounts, one screen**: session and weekly usage bars, subscription tier, time until reset
+- **Nicknames, colors and notes** per account, auto-saved
+- **History charts** of usage over time
+- **Telegram notifications** shortly before a limit resets, plus a bot you can message to add notes
+- **Self-hosted**: your data lives in your own Postgres database, nothing goes to a third party
 
 ---
 
-## Quick Start
+## How it works
 
-### Prerequisites
-- Docker & Docker Compose
-- A domain with DNS pointing to your server (for HTTPS via Caddy)
-- Chrome/Chromium/Brave browser
-
-### One-Command Deploy
-```bash
-git clone https://github.com/your-username/UsageOS.git
-cd UsageOS
-cp .env.example .env    # Edit with your values
-docker compose up -d
+```
+Claude.ai (any account, in your browser)
+        │
+        ▼
+Chrome extension ── intercepts claude.ai API responses, computes usage %
+        │  POST /api/v1/sync   (after every message; queued offline if the server is down)
+        ▼
+FastAPI backend ──► PostgreSQL
+        │
+        ├──► React dashboard (nginx serves the UI and proxies /api/ to the backend)
+        │
+        └──► Telegram scheduler (checks every 60s) ──► Telegram Bot API
+                      ▲
+                      └── Telegram webhook ◄── you reply "note <nickname> <text>"
 ```
 
-### Access Points
-| Service | URL |
-|---------|-----|
-| Dashboard | `https://your-domain.com` |
-| API Docs | `https://your-domain.com/docs` |
-| Extension Dashboard | `chrome-extension://<id>/dashboard.html` |
-
-### First-Time Setup
-1. Open the dashboard, click **Settings** (gear icon)
-2. Enter your **ATLAS_URL** (e.g., `https://usageos.yourdomain.com`)
-3. Enter your **ATLAS_API_KEY** (from `.env` → `ATLAS_API_KEY`)
-4. Save → extension will start syncing automatically
-
----
+1. **Capture.** The extension watches claude.ai's own API responses (usage, limits, reset timestamps, subscription tier) and identifies which account they belong to.
+2. **Sync.** After each message, the extension posts a snapshot to your backend at `/api/v1/sync`, authenticated with your API key. If the server is unreachable, snapshots are queued and sent later.
+3. **Store.** The backend keeps the latest state per account plus a history of sync events for charts.
+4. **View.** The React dashboard reads from the backend and renders one card per account.
+5. **Notify.** A background loop in the backend checks every 60 seconds for any limit resetting within the next 10 minutes. If it finds one that hasn't been announced yet, it messages the Telegram chat linked to that account. Duplicate alerts are prevented by a unique constraint on the notification log.
 
 ## Components
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Chrome Extension** | MV3, vanilla JS | Captures usage from claude.ai, injects UI, syncs to backend |
-| **Backend API** | FastAPI + PostgreSQL | Sync endpoint, accounts CRUD, Telegram webhook, notifications |
-| **Frontend Dashboard** | React 18 + Vite + Tailwind | Multi-account grid, usage bars, history charts, notes |
-| **Extension Dashboard** | HTML/JS/Chart.js | Per-account detail view with time-series charts |
-| **Telegram Bot** | HTTP webhook | `note`/`usage` commands, outbound limit-reset notifications |
+| Component | Tech | Role |
+|---|---|---|
+| `extension/` | Chrome MV3, vanilla JS | Captures usage from claude.ai and syncs it to the backend; also has a local popup dashboard |
+| `backend/` | FastAPI, SQLAlchemy, Alembic, PostgreSQL | Sync endpoint, accounts API, notes, Telegram webhook and scheduler |
+| `frontend/` | React, Vite, TypeScript, Tailwind | Multi-account dashboard served by nginx |
+
+The extension is a fork of [lugia19/Claude-Usage-Extension](https://github.com/lugia19/Claude-Usage-Extension) (GPL-3.0), modified to sync to a self-hosted backend.
 
 ---
 
-## Chrome Extension (Overview)
+## Quick start
 
-### What It Does
-- Intercepts claude.ai API responses (`/completion`, `/retry_completion`, `/billing`, `/account_profile`)
-- Extracts token usage, limits, subscription tier, reset timestamps
-- Syncs to UsageOS backend via `getPopupUsageData` / `atlasSync`
-- Injects a floating usage widget into claude.ai pages
-- Supports multi-container (Chrome profiles, Brave, Electron)
+### Prerequisites
 
-### Key Features
-- **Multi-account**: Track multiple Claude organizations simultaneously
-- **Per-account nicknames & colors**: Visual distinction in dashboard
-- **Per-account notes**: Auto-saved, synced via backend
-- **Telegram linking**: Set `telegram_chat_id` per account for notifications
-- **Container isolation**: Works across Chrome profiles, Brave, Electron
+- Docker and Docker Compose
+- A server (or any always-on machine) to host it
+- A domain with HTTPS if you want to reach it from other devices or use Telegram (Telegram webhooks require a public HTTPS URL). A reverse proxy such as Caddy or a Cloudflare Tunnel works well.
+- Chrome, Brave or another Chromium browser
 
-### Data Flow
-```
-claude.ai API response → Content script extracts usage →
-Background service worker batches → POST /api/v1/sync →
-PostgreSQL → Dashboard reads via GET /api/v1/accounts
-```
+### 1. Clone and configure
 
-### Installation
-1. `chrome://extensions` → Developer mode → **Load unpacked** → select `extension/`
-2. Or install from Chrome Web Store (when published)
-3. Open `claude.ai` → widget appears automatically
-3. Right-click extension icon → **Options** → enter server URL + API key
-
----
-
-## Backend API Reference
-
-Base URL: `https://your-domain.com/api/v1`
-
-### Accounts
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/accounts` | List all accounts with latest usage + notes |
-| `GET` | `/accounts/{id}` | Single account detail |
-| `PATCH` | `/accounts/{id}` | Update nickname, color, `telegram_chat_id` |
-| `GET` | `/accounts/{id}/sync-history?limit=50` | Full sync history for charts |
-| `GET` | `/accounts/{id}/note` | Get note content |
-| `PUT` | `/accounts/{id}/note` | Update note content |
-
-### Sync (Extension → Backend)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/sync` | Extension posts usage data (batched, retried offline) |
-
-### Telegram
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/telegram/webhook` | Bot webhook endpoint |
-
-### Health
-| Method | Endpoint |
-|--------|----------|
-| `GET` | `/health` |
-
-### Example: List Accounts
 ```bash
-curl https://usageos.yourdomain.com/api/v1/accounts
+git clone https://github.com/YRB19/UsageOS.git
+cd UsageOS
+cp .env.example .env
 ```
 
----
+Edit `.env`:
 
-## Frontend Dashboard
-
-### Tech Stack
-- **React 18** + **Vite** + **TypeScript**
-- **Tailwind CSS** + **Framer Motion** animations
-- **Recharts** for history sparklines
-- **Axios** for API, **Lucide** icons
-
-### Routes
-| Route | Component |
-|-------|-----------|
-| `/` | `Dashboard` (account grid) |
-| `/account/:id` | `AccountHistoryPage` (detail + Chart.js) |
-
-### Key Components
-| Component | Purpose |
-|-----------|---------|
-| `AccountCard` | Grid item: avatar, nickname, status badge, usage bars, notes |
-| `UsageBar` | Animated 3px progress bar with color-coded threshold |
-| `HistoryChart` | Expandable Recharts sparkline (session/weekly/sonnet/opus) |
-| `NotesTextarea` | Debounced auto-save (600ms) |
-| `TelegramChatIdPicker` | Modal to link Telegram chat ID |
-| `Header` | Sticky, glassmorphism, live clock + refresh |
-
----
-
-## Telegram Bot (Brief)
-
-### Setup
-```bash
-# 1. Create bot via @BotFather → get TOKEN
-# 2. Set webhook:
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d url="https://your-domain.com/api/v1/telegram/webhook"
-```
-
-### Commands
-| Command | Description |
-|---------|-------------|
-| `note <nickname> <text>` | Save note to account |
-| `usage` | All accounts summary |
-| `usage <nickname>` | Single account detail |
-| `help` | Show commands |
-
-### Notifications
-- Sent when any account's limit resets within 10 minutes
-- Requires `telegram_chat_id` set on account (via dashboard or `PATCH /accounts/{id}`)
-
----
-
-## Deployment
-
-### Docker Compose (Production)
-```yaml
-# docker-compose.yml
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes: [postgres_data:/var/lib/postgresql/data]
-    healthcheck: pg_isready -U ${POSTGRES_USER}
-
-  backend:
-    build: ./backend
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      ATLAS_API_KEY: ${ATLAS_API_KEY}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-    depends_on: [postgres]
-
-  frontend:
-    build: ./frontend
-    ports: ["3000:80"]
-    depends_on: [backend]
-```
-
-### Caddy Reverse Proxy (HTTPS)
-```caddyfile
-usageos.yourdomain.com {
-    reverse_proxy frontend:80
-    header Strict-Transport-Security max-age=31536000
-}
-
-api.yourdomain.com {
-    reverse_proxy backend:8000
-}
-```
-
-### Environment Variables
 | Variable | Description | Required |
-|----------|-------------|----------|
-| `POSTGRES_USER` | DB username | Yes |
-| `POSTGRES_PASSWORD` | DB password | Yes |
-| `POSTGRES_DB` | DB name | Yes |
-| `ATLAS_API_KEY` | Extension auth key | Yes |
-| `TELEGRAM_BOT_TOKEN` | BotFather token | No (for bot) |
-| `CORS_ORIGINS` | Frontend URL(s) | Yes |
+|---|---|---|
+| `POSTGRES_USER` | Database user | Yes |
+| `POSTGRES_PASSWORD` | Database password, use something strong | Yes |
+| `POSTGRES_DB` | Database name | Yes |
+| `ATLAS_API_KEY` | Shared secret used by the extension and dashboard to authenticate to the backend | Yes |
+| `TELEGRAM_BOT_TOKEN` | Token from @BotFather | Only for Telegram features |
+| `CORS_ORIGINS` | Your dashboard URL, exactly as you open it in the browser | Yes |
+
+Generate a good API key:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+### 2. Start the stack
+
+```bash
+docker compose up -d --build
+```
+
+This starts Postgres, the backend (port 8000 inside Docker) and the frontend (port 3000 on the host, nginx on 80 inside the container). Tables are created automatically on startup.
+
+> **Note:** if your `docker-compose.yml` attaches services to an external `atlas-network` (used to share a network with a Caddy container), create it first with `docker network create atlas-network`, or remove that network from the compose file if you don't use a shared proxy.
+
+Check it's healthy:
+
+```bash
+curl -s http://localhost:3000/api/v1/health
+```
+
+### 3. Put it behind HTTPS (recommended)
+
+Point a reverse proxy at the frontend container. With Caddy:
+
+```
+usageos.yourdomain.com {
+    reverse_proxy usageos-frontend:80
+}
+```
+
+The frontend's nginx already forwards `/api/*` to the backend, so you only need one public hostname for both the dashboard and the API.
+
+### 4. Install the extension
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and select the `extension/` folder.
+3. Open the extension's **Options** page (extension icon, then the settings gear) and enter:
+   - **Server URL**: `https://usageos.yourdomain.com` (no trailing slash)
+   - **API Key**: the `ATLAS_API_KEY` from your `.env`
+4. Click **Test Connection**.
+5. Open claude.ai in each account you want to track and send a message. The account appears on your dashboard after the first sync.
+
+After changing any extension code, click the reload icon on its card in `chrome://extensions`.
+
+### 5. Optional: Telegram notifications
+
+1. Message [@BotFather](https://t.me/BotFather), create a bot, and put the token in `.env` as `TELEGRAM_BOT_TOKEN`. Rebuild with `docker compose up -d --build backend`.
+2. Register the webhook:
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://usageos.yourdomain.com/api/v1/telegram/webhook"
+   ```
+   You should get `{"ok":true,...}`.
+3. Send any message to your bot to start a chat, then find your chat ID (for example via [@userinfobot](https://t.me/userinfobot)).
+4. On the dashboard, click the small **checkmark icon** next to an account's name, paste the chat ID and **Save**. Chat IDs are stored per account, so different accounts can notify different chats.
+
+**Bot commands**
+
+| Command | What it does |
+|---|---|
+| `note <nickname> <text>` | Saves a note on the account with that nickname |
 
 ---
 
-## Configuration
+## Using the dashboard
 
-### Extension Options Page
-| Field | Description |
-|-------|-------------|
-| **Server URL** | `https://api.yourdomain.com` (no trailing slash) |
-| **API Key** | Value of `ATLAS_API_KEY` from `.env` |
+- Each card shows the account's identity, usage bars, tier and reset countdown.
+- Click the nickname to rename an account and use the color picker to tell accounts apart.
+- Type in the notes box; it auto-saves after a short pause.
+- Expand a card to see its usage history chart.
 
-### `.env.example`
-```env
-POSTGRES_USER=atlas
-POSTGRES_PASSWORD=changeme
-POSTGRES_DB=atlas
-ATLAS_API_KEY=sk_usageos_abcdef123456
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-CORS_ORIGINS=https://usageos.yourdomain.com
+---
+
+## API reference
+
+Base path: `/api/v1`. All endpoints except `/health` require `Authorization: Bearer <ATLAS_API_KEY>`.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Health check (no auth) |
+| `POST` | `/sync` | Extension posts a usage snapshot |
+| `GET` | `/accounts` | List accounts with latest usage and notes |
+| `GET` | `/accounts/{id}` | Single account |
+| `PATCH` | `/accounts/{id}` | Update nickname, color, `telegram_chat_id` |
+| `GET` | `/accounts/{id}/note` | Get the note |
+| `PUT` | `/accounts/{id}/note` | Update the note (`{"content": "..."}`) |
+| `POST` | `/telegram/webhook` | Called by Telegram |
+
+Example:
+
+```bash
+curl -s https://usageos.yourdomain.com/api/v1/accounts \
+  -H "Authorization: Bearer $ATLAS_API_KEY" | python3 -m json.tool
+```
+
+## Data model
+
+```
+accounts           id, email, org_id, nickname, color, telegram_chat_id, subscription_tier, ...
+sync_events        id, account_id, limits (JSONB), timestamp, ...
+account_notes      account_id, content, updated_at
+notification_log   id, account_id, limit_type, resets_at, notified_at   (unique per reset)
 ```
 
 ---
 
 ## Development
 
-### Backend
+**Backend**
+
 ```bash
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
-# API at http://localhost:8000/docs
+# Swagger docs at http://localhost:8000/docs
 ```
 
-### Frontend
+Migrations use Alembic with the **sync** driver (psycopg2):
+
+```bash
+docker compose exec backend alembic upgrade head
+```
+
+**Frontend**
+
 ```bash
 cd frontend
 npm install
 npm run dev
-# http://localhost:5173 (proxies /api to backend:8000)
 ```
 
-### Extension
+Vite bakes `VITE_*` variables in at build time, so in Docker they must be passed as build args, not just runtime environment.
+
+**Useful commands**
+
 ```bash
-cd extension
-npm install
-npm run build          # builds to dist/
-# Load dist/ as unpacked extension
+docker compose up -d --build backend     # rebuild after backend changes
+docker compose up -d --build frontend    # rebuild after frontend changes
+docker compose logs -f backend           # watch logs
+docker compose exec postgres psql -U atlas -d atlas   # database shell
 ```
-
----
-
-## Architecture Notes
-
-### Database Schema
-```sql
-accounts (id, provider, email, org_id, nickname, color, telegram_chat_id, subscription_tier, created_at)
-sync_events (id, account_id, email, org_id, subscription_tier, limits JSONB, timestamp)
-account_notes (account_id PK, content, updated_at)
-notification_log (id, account_id, limit_type, resets_at, notified_at)
-```
-
-### Container Strategies
-| Platform | Strategy |
-|----------|----------|
-| Chrome | `chrome.cookies` + `cookieStoreId` |
-| Brave | Same as Chrome |
-| Firefox | `contextualIdentities` |
-| Electron | Custom protocol handler |
-
-### Scheduler
-- Runs every 60s in background service worker
-- Checks limits resetting within 10 minutes
-- Sends Telegram notification (deduped via `notification_log`)
 
 ---
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| **Extension stuck "Loading accounts..."** | Refresh any open `claude.ai` tabs → reopen dashboard |
-| **"Receiving end does not exist"** | Content script not injected → refresh `claude.ai` tabs |
-| **Chart.js CSP error** | Ensure `lib/chart.umd.min.js` in `web_accessible_resources` |
-| **Telegram webhook 404** | Verify `TELEGRAM_BOT_TOKEN` set, run `setWebhook` again |
-| **Extension context invalidated** | Reload extension in `chrome://extensions` |
-| **CORS errors** | Check `CORS_ORIGINS` matches dashboard URL exactly |
+| Problem | Fix |
+|---|---|
+| Code changes don't take effect | `docker compose restart` does not pick up new builds. Use `docker compose up -d --build`. |
+| Extension shows "Could not load manifest" | `extension/manifest.json` must exist and match `manifest_chrome.json`. Chrome needs that exact filename. |
+| Extension can't reach the server | Check the Server URL, that your domain is listed under `host_permissions` in the manifest, and use **Test Connection** on the Options page. |
+| "Receiving end does not exist" / context invalidated | Refresh your claude.ai tabs and reload the extension in `chrome://extensions`. |
+| Account shows "Unknown" email | Email is derived from the organization name (`"<email>'s Organization"`), so Team or custom-named orgs can't be resolved. The nickname still works. |
+| 502 from the reverse proxy | The proxy and the frontend container must share a Docker network so the container name resolves. |
+| CORS errors | `CORS_ORIGINS` must match the dashboard URL exactly. |
+| No Telegram alerts | Confirm the webhook returned `{"ok":true}`, a chat ID is saved on the account, and a reset is actually within 10 minutes. |
 
----
+## Security notes
+
+- Treat `ATLAS_API_KEY` and `TELEGRAM_BOT_TOKEN` like passwords. Never commit `.env`.
+- If a secret is ever pasted somewhere public, rotate it: change the Postgres password in `.env` and recreate the containers; generate a new API key and update both `.env` and the extension Options page; use `/revoke` with @BotFather for a new bot token.
+- Expose the stack only through HTTPS.
 
 ## License
-MIT — see [LICENSE](LICENSE)
 
----
-
-## Contributing
-1. Fork → feature branch → PR
-2. Run lint: `npm run lint` (frontend), `ruff check` (backend)
-3. Tests: `npm test` / `pytest`
-
----
-
-*Built with ❤️ for the Claude power-user community.*
+The extension is derived from GPL-3.0 code, so it remains under GPL-3.0. See the license files in the repository for details.
