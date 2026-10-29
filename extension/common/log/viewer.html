@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Debug logs</title>
+	<style>
+		:root {
+			color-scheme: light dark;
+			--bg: #ffffff;
+			--panel: #f4f4f5;
+			--text: #1f1f1f;
+			--muted: #6b6b6b;
+			--border: #d4d4d8;
+			--button: #e4e4e7;
+			--button-hover: #d4d4d8;
+			--time: #2563eb;
+			--warn-bg: rgba(234, 179, 8, 0.15);
+			--warn: #a16207;
+			--error-bg: rgba(220, 38, 38, 0.12);
+			--error: #b91c1c;
+		}
+
+		@media (prefers-color-scheme: dark) {
+			:root {
+				--bg: #1e1e1e;
+				--panel: #252526;
+				--text: #d4d4d4;
+				--muted: #9a9a9a;
+				--border: #454545;
+				--button: #2d2d2d;
+				--button-hover: #3e3e3e;
+				--time: #6796e6;
+				--warn-bg: rgba(234, 179, 8, 0.12);
+				--warn: #e5c07b;
+				--error-bg: rgba(248, 113, 113, 0.12);
+				--error: #f48771;
+			}
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			display: flex;
+			flex-direction: column;
+			height: 100vh;
+			margin: 0;
+			padding: 12px;
+			gap: 10px;
+			background: var(--bg);
+			color: var(--text);
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			font-size: 13px;
+		}
+
+		.toolbar {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px;
+		}
+
+		h1 {
+			font-size: 15px;
+			margin: 0 8px 0 0;
+		}
+
+		input,
+		select,
+		button {
+			font: inherit;
+			color: inherit;
+			background: var(--button);
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			padding: 5px 9px;
+		}
+
+		input {
+			background: var(--bg);
+			flex: 1 1 160px;
+			min-width: 120px;
+		}
+
+		button {
+			cursor: pointer;
+		}
+
+		button:hover {
+			background: var(--button-hover);
+		}
+
+		.count {
+			color: var(--muted);
+			margin-left: auto;
+		}
+
+		#logs {
+			flex: 1;
+			overflow-y: auto;
+			margin: 0;
+			padding: 8px 10px;
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			font-family: Consolas, Monaco, 'Courier New', monospace;
+			font-size: 12.5px;
+			line-height: 1.5;
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		.line {
+			padding: 1px 4px;
+			border-radius: 3px;
+		}
+
+		.line[data-level="warn"] {
+			background: var(--warn-bg);
+		}
+
+		.line[data-level="warn"] .message {
+			color: var(--warn);
+		}
+
+		.line[data-level="error"] {
+			background: var(--error-bg);
+		}
+
+		.line[data-level="error"] .message {
+			color: var(--error);
+		}
+
+		.time {
+			color: var(--time);
+			margin-right: 8px;
+		}
+
+		.sender {
+			color: var(--muted);
+			margin-right: 8px;
+		}
+
+		.empty {
+			color: var(--muted);
+			font-family: inherit;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="toolbar">
+		<h1 id="title"></h1>
+		<input id="search" type="search">
+		<select id="level">
+			<option value="">*</option>
+			<option value="debug">debug</option>
+			<option value="warn">warn</option>
+			<option value="error">error</option>
+		</select>
+		<select id="sender"></select>
+		<button id="copy"></button>
+		<button id="clear"></button>
+		<span class="count" id="count"></span>
+	</div>
+	<div id="logs"></div>
+
+	<script src="../i18n/all.js"></script>
+	<script src="../i18n/i18n-core.js"></script>
+	<script src="viewer.js"></script>
+</body>
+
+</html>
