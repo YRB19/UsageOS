@@ -1,4 +1,3 @@
-/* global CONFIG */
 'use strict';
 
 // shared/dataclasses.js - Single source of truth for data classes
@@ -13,10 +12,43 @@ function isPeakHours() {
 	return hour >= 12 && hour < 18;
 }
 
+// "We looked, and we could not tell which model this is" - distinct from "the caller expressed no
+// opinion about the model", which is what a null/absent override means.
+//
+// An explicit sentinel rather than an undefined-vs-null distinction on purpose: conflating those two
+// is exactly the bug this exists to prevent. The picker read as the tier's default model for weeks
+// because an unreadable picker produced a confident wrong answer instead of admitting ignorance, and
+// nothing downstream could tell the difference.
+//
+// It is only ever passed as an argument, never stored on a ConversationData - the conversation's own
+// unknown model is plain null, matching how every other absent field on that class is represented.
+const MODEL_UNKNOWN = '__model_unknown__';
+
 // Model family (Opus/Sonnet/...) for an API model ID; null if unrecognized.
 function modelFamilyFromVersion(modelVersion) {
 	const slug = (modelVersion || '').toLowerCase();
 	return CONFIG.MODELS.find(family => slug.includes(family.toLowerCase())) || null;
+}
+
+// Cost weight for an API model ID. Exact lookup rather than prefix matching, because model IDs
+// prefix each other ("claude-opus-5" is a prefix of "claude-opus-5-5"); a dated snapshot ID
+// retries without its date. An ID we don't ship a price for falls back to its family's weight,
+// so a newly released model still prices as roughly the right tier. `family` is only consulted
+// for that fallback, and is derived from the ID when not given.
+// `conversationTokens` picks the tier of a length-tiered entry (see MODEL_WEIGHTS).
+function modelWeight(modelVersion, family, conversationTokens) {
+	const slug = modelVersion && modelVersion !== MODEL_UNKNOWN ? modelVersion.toLowerCase() : '';
+	const entry = CONFIG.MODEL_WEIGHTS[slug] ?? CONFIG.MODEL_WEIGHTS[undated(slug)];
+	if (typeof entry === 'object') return conversationTokens > entry.longAbove ? entry.longWeight : entry.weight;
+	return entry
+		?? CONFIG.FAMILY_MODEL_WEIGHTS[family ?? modelFamilyFromVersion(slug)]
+		?? CONFIG.FALLBACK_MODEL_WEIGHT;
+}
+
+// A model ID without its date suffix (claude-opus-4-5-20251101 -> claude-opus-4-5), the form the
+// per-model tables are keyed by.
+function undated(modelVersion) {
+	return (modelVersion || '').toLowerCase().replace(/-\d{8}$/, '');
 }
 
 // The model claude.ai's picker defaults to for this plan. Pass a null/unknown tier to get
@@ -27,6 +59,16 @@ function defaultModelVersionForTier(subscriptionTier) {
 
 function defaultModelForTier(subscriptionTier) {
 	return modelFamilyFromVersion(defaultModelVersionForTier(subscriptionTier));
+}
+
+// A missing cap is a standing condition, not an event - getLimitingFactor re-derives it on every
+// usage update - so warn once per tier/limit rather than on every pass.
+const warnedMissingCaps = new Set();
+function warnMissingCapOnce(subscriptionTier, limitKey) {
+	const key = `${subscriptionTier}:${limitKey}`;
+	if (warnedMissingCaps.has(key)) return;
+	warnedMissingCaps.add(key);
+	console.warn(`No ESTIMATED_CAPS entry for ${key} - this limit is excluded from the messages-left estimate`);
 }
 
 class UsageData {
@@ -42,6 +84,12 @@ class UsageData {
 		this.subscriptionTier = data.subscriptionTier || 'claude_free';
 		this.extraUsage = data.extraUsage || null;  // { isEnabled, monthlyLimit, usedCredits } (cents)
 		this.creditBalance = data.creditBalance ?? null;  // cents (from /credits)
+		// Display pref, stamped by the background at build time (getUsageData) so every consumer
+		// sees the same bar: measure extra usage against the monthly spend limit rather than
+		// against what can actually be spent. See getExtraUsageEffectiveTotal. Defaults to false
+		// here only because a bare constructor has no storage to consult; the background decides
+		// the real default (on for new installs, off for installs that predate the choice).
+		this.extraUsageAgainstLimit = data.extraUsageAgainstLimit === true;
 		this.orgId = data.orgId || null;
 	}
 
@@ -76,13 +124,15 @@ class UsageData {
 			extraUsage = {
 				isEnabled: true,
 				monthlyLimit: spend.limit?.amount_minor ?? spend.cap?.money?.amount_minor ?? 0,
-				usedCredits: spend.used?.amount_minor || 0
+				// `??`, not `||` - a genuine zero spend and a missing `used` object are different
+				// things, and the latter should not quietly render as "$0.00 used".
+				usedCredits: spend.used?.amount_minor ?? 0
 			};
 		} else if (apiResponse.extra_usage?.is_enabled) {
 			extraUsage = {
 				isEnabled: true,
 				monthlyLimit: apiResponse.extra_usage.monthly_limit,
-				usedCredits: apiResponse.extra_usage.used_credits || 0
+				usedCredits: apiResponse.extra_usage.used_credits ?? 0
 			};
 		}
 
@@ -124,13 +174,23 @@ class UsageData {
 		return limits;
 	}
 
-	// Convert % to estimated tokens remaining for a limit
+	// Convert % to estimated tokens remaining for a limit.
+	//
+	// Returns null for two different reasons, and the caller (getLimitingFactor) is right to skip
+	// either way - but only one of them is normal. "This account has no such limit" is expected;
+	// "we ship no ESTIMATED_CAPS entry for this tier" is a config gap that silently drops the limit
+	// out of the messages-left estimate with nothing to show for it. Warn on that one so a missing
+	// tier stops being invisible - same reasoning as the unreadable-picker warning, and the same
+	// shape as the console.warn for an unrecognised scoped limit above.
 	getEstimatedTokensRemaining(limitKey) {
 		const limit = this.limits[limitKey];
 		if (!limit) return null;
 
 		let cap = CONFIG.ESTIMATED_CAPS?.[this.subscriptionTier]?.[limitKey];
-		if (!cap) return null;
+		if (!cap) {
+			warnMissingCapOnce(this.subscriptionTier, limitKey);
+			return null;
+		}
 
 		// During peak hours, session cap is effectively lower
 		if (limitKey === 'session' && isPeakHours()) {
@@ -230,11 +290,18 @@ class UsageData {
 		return Math.min(monthlyRemaining, this.creditBalance);
 	}
 
-	// Get effective extra usage total (used + remaining) for bar display
+	// Get effective extra usage total (used + remaining) for bar display. With the "against limit"
+	// pref the total is the monthly spend limit instead of what can actually be spent (issue #96);
+	// max() with used mirrors the clamp in getExtraUsageRemaining so an overshoot can't read >100%.
+	// Falls back to the bounded total when no limit is set, since "% of nothing" means nothing.
 	getExtraUsageEffectiveTotal() {
 		const remaining = this.getExtraUsageRemaining();
 		if (remaining === null) return null;
-		return this.extraUsage.usedCredits + remaining;
+		const used = this.extraUsage.usedCredits;
+		if (this.extraUsageAgainstLimit && this.extraUsage.monthlyLimit > 0) {
+			return Math.max(used, this.extraUsage.monthlyLimit);
+		}
+		return used + remaining;
 	}
 
 	// Can this account use extra usage at all? Free accounts can't buy credits,
@@ -278,6 +345,7 @@ class UsageData {
 			subscriptionTier: this.subscriptionTier,
 			extraUsage: this.extraUsage,
 			creditBalance: this.creditBalance,
+			extraUsageAgainstLimit: this.extraUsageAgainstLimit,
 			orgId: this.orgId
 		};
 	}
@@ -294,14 +362,37 @@ class ConversationData {
 
 		// Calculated metrics
 		this.length = data.length || 0;  // Total tokens in conversation
+		this.systemPromptTokens = data.systemPromptTokens || 0; // The part of `length` that is the (cached) system prompt
 		this.cost = data.cost || 0;		 // Token cost (with caching possibly considered)
 		this.uncachedCost = data.uncachedCost || 0;       // Without caching
 		this.futureCost = data.futureCost || 0; // Estimated cost of future messages
 		this.uncachedFutureCost = data.uncachedFutureCost || 0; // Estimated future cost without caching
-		// Defensive only - the background always populates both before this is rehydrated
-		// from JSON, and it has a subscription tier available to pick a better default.
-		this.modelVersion = data.modelVersion || CONFIG.DEFAULT_MODEL_VERSION;
-		this.model = data.model || modelFamilyFromVersion(this.modelVersion);
+		// null means "the API did not tell us which model this conversation uses" - carried through
+		// rather than papered over with CONFIG.DEFAULT_MODEL_VERSION. Substituting a default here
+		// made a freshly created chat (whose record briefly has no model) claim to be Sonnet, which
+		// then read as a model change and hid the cache indicator; applyPendingModel in the
+		// background exists to fill this in from the authoritative request body.
+		//
+		// `??`, not `||`: toJSON/fromJSON round-trip this field verbatim, so an explicit null has to
+		// survive rehydration instead of being re-defaulted on the content-script side.
+		this.modelVersion = data.modelVersion ?? null;
+		this.model = data.model ?? modelFamilyFromVersion(this.modelVersion);
+
+		// Identifies the turn this data describes: the uuid claude.ai pre-generates for the
+		// assistant message, reported by the completion body, the SSE stream and the tree alike
+		// (see the pendingRequests comment in background.js). Both the provisional estimate and the
+		// authoritative pass that follows it name the SAME turn, which is what lets the content
+		// script tell "the conversation moved on" apart from "the same message settled" - their
+		// timestamps can't, since the provisional stamps Date.now() and the pass reports the
+		// assistant message's real created_at.
+		this.lastMessageUuid = data.lastMessageUuid ?? null;
+
+		// The picker's effort/thinking label as it read when this data was built - the second half
+		// of the cache key, alongside modelVersion. Only the content script can fill this in (the
+		// value lives nowhere the background can see: changing effort inside a conversation fires
+		// no request at all, and the picker's own wording is localized), so it stays null here and
+		// is stamped on arrival. See getCurrentEffortLabel in content_utils.js.
+		this.effortLabel = data.effortLabel ?? null;
 
 		// Cache status
 		this.costUsedCache = data.costUsedCache || false;	//Currently unused, since now we show future_cost rather than past cost
@@ -313,12 +404,45 @@ class ConversationData {
 		this.lastMessageTimestamp = data.lastMessageTimestamp || null; // Timestamp of the last message in the conversation
 		this.lengthIsEstimate = data.lengthIsEstimate || false; // True if length may be inaccurate due to features
 		this.orgId = data.orgId || null;
+
+		// Runs on a Claude Code session (workspace-upgraded), whose context window differs from a plain
+		// chat's: see getContextWindow.
+		this.workspaceUpgraded = data.workspaceUpgraded || false;
+		// That session's own reading, taken with its context size on a settled turn:
+		// { model, window, compactAt }. Null when there is none.
+		this.sessionContext = data.sessionContext ?? null;
 	}
 
-	// Add helper method to check if currently cached
-	isCurrentlyCached(currentModelVersion) {
-		return this.conversationIsCachedUntil && this.conversationIsCachedUntil > Date.now()
-			&& (!currentModelVersion || this.modelVersion === currentModelVersion);
+	// Whether the NEXT message on `currentModelVersion` will hit this conversation's cache.
+	//
+	// This is a promise made to the user, not an estimate, so it is never asserted on a guess: if
+	// either side of the comparison is unknown the answer is no. That is the opposite of how the
+	// cost figures below degrade, and deliberately so - over-reporting a cost is harmless, while
+	// promising a discount that does not exist is not, and a wrong "cached" is invisible.
+	//
+	// `currentModelVersion` has three meanings:
+	//   absent/null    - the caller has no opinion; only cache validity matters
+	//   MODEL_UNKNOWN  - the caller looked and could not tell; refuse to claim
+	//   anything else  - a real model id to compare against
+	//
+	// `currentEffortLabel` is the picker's effort/thinking label right now, to be compared against
+	// the one stamped on this data. Absent/null means the caller has no opinion.
+	isCurrentlyCached(currentModelVersion, currentEffortLabel) {
+		if (!this.conversationIsCachedUntil || this.conversationIsCachedUntil <= Date.now()) return false;
+		// Effort is part of the prompt the same way the model is, so changing it misses the cache
+		// just as hard. Checked first because it is independent of the model comparison below and
+		// applies even when the caller has no opinion on the model.
+		//
+		// Asymmetric with the model check on purpose: this only refuses when BOTH sides are known
+		// and differ. An unreadable picker already surfaces as MODEL_UNKNOWN below, so there is no
+		// case where the effort is the only thing we failed to read - and a null on either side
+		// here means "not observed", which is not evidence of a change.
+		if (this.effortLabel && currentEffortLabel && this.effortLabel !== currentEffortLabel) return false;
+		if (currentModelVersion === MODEL_UNKNOWN) return false;
+		if (!currentModelVersion) return true;
+		// We know what is being sent but not what the cache holds, so we cannot say they match.
+		if (!this.modelVersion) return false;
+		return this.modelVersion === currentModelVersion;
 	}
 
 	// Add method to get time until cache expires
@@ -337,19 +461,24 @@ class ConversationData {
 	}
 
 
-	// Calculate weighted cost based on model
-	getWeightedCost(modelOverride) {
-		let model = this.model;
-		if (modelOverride) model = modelOverride;
-		const weight = CONFIG.MODEL_WEIGHTS[model] ?? CONFIG.FALLBACK_MODEL_WEIGHT;
-		return Math.round(this.cost * weight);
+	// Cost weight for pricing a message on this conversation. Priced by model ID: the override when
+	// it names a real model (the picker's reading), else the conversation's own. The family - the
+	// override, else the conversation's - only prices an ID we have no entry for, or no ID at all.
+	getPricingWeight(modelOverride, modelVersionOverride) {
+		const modelVersion = modelVersionOverride && modelVersionOverride !== MODEL_UNKNOWN
+			? modelVersionOverride
+			: this.modelVersion;
+		return modelWeight(modelVersion, modelOverride || this.model, this.length);
 	}
 
-	getWeightedFutureCost(modelOverride, modelVersionOverride) {
-		let model = this.model;
-		if (modelOverride) model = modelOverride;
-		const weight = CONFIG.MODEL_WEIGHTS[model] ?? CONFIG.FALLBACK_MODEL_WEIGHT;
-		const baseCost = this.isCurrentlyCached(modelVersionOverride) ? this.futureCost : this.uncachedFutureCost;
+	// Calculate weighted cost based on model
+	getWeightedCost(modelOverride, modelVersionOverride) {
+		return Math.round(this.cost * this.getPricingWeight(modelOverride, modelVersionOverride));
+	}
+
+	getWeightedFutureCost(modelOverride, modelVersionOverride, effortLabelOverride) {
+		const weight = this.getPricingWeight(modelOverride, modelVersionOverride);
+		const baseCost = this.isCurrentlyCached(modelVersionOverride, effortLabelOverride) ? this.futureCost : this.uncachedFutureCost;
 		return Math.round(baseCost * weight);
 	}
 
@@ -358,9 +487,34 @@ class ConversationData {
 		return this.cost >= CONFIG.WARNING.COST;
 	}
 
-	// Check if conversation is long
-	isLong() {
-		return this.length >= CONFIG.WARNING.LENGTH;
+	// The context window the next message gets, as { window, compactAt } (compactAt: where it gets
+	// compacted, null if unknown), or null for a model with no CONTEXT_WINDOWS entry. For the picker's
+	// model (the next message is what hits the limit); with no picker to read (null), the
+	// conversation's own. An unreadable picker (MODEL_UNKNOWN) means a model we can't name was
+	// selected, so it gets no window rather than the previous model's. On an upgraded chat, its
+	// session's own reading wins while it is for that model.
+	getContextWindow(modelVersionOverride) {
+		if (modelVersionOverride === MODEL_UNKNOWN) return null;
+		const modelVersion = modelVersionOverride || this.modelVersion;
+		if (!modelVersion) return null;
+		const session = this.sessionContext;
+		if (this.workspaceUpgraded && session?.window && undated(session.model) === undated(modelVersion)) {
+			return { window: session.window, compactAt: session.compactAt ?? null };
+		}
+		const entry = CONFIG.CONTEXT_WINDOWS?.[undated(modelVersion)];
+		if (!entry) return null;
+		return this.workspaceUpgraded
+			? { window: entry.workspace[0], compactAt: entry.workspace[1] }
+			: { window: entry.chat, compactAt: null };
+	}
+
+	// Check if conversation is long: near the next message's context window, or past a flat length
+	// for a model with none on record.
+	isLong(modelVersionOverride) {
+		const window = this.getContextWindow(modelVersionOverride)?.window;
+		return window
+			? this.length >= window * CONFIG.WARNING.LENGTH_FRACTION
+			: this.length >= CONFIG.WARNING.LENGTH;
 	}
 
 	toJSON() {
@@ -368,19 +522,24 @@ class ConversationData {
 			conversationId: this.conversationId,
 			messages: this.messages,
 			length: this.length,
+			systemPromptTokens: this.systemPromptTokens,
 			cost: this.cost,
 			uncachedCost: this.uncachedCost,
 			futureCost: this.futureCost,
 			uncachedFutureCost: this.uncachedFutureCost,
 			model: this.model,
 			modelVersion: this.modelVersion,
+			lastMessageUuid: this.lastMessageUuid,
+			effortLabel: this.effortLabel,
 			costUsedCache: this.costUsedCache,
 			conversationIsCachedUntil: this.conversationIsCachedUntil,
 			projectUuid: this.projectUuid,
 			settings: this.settings,
 			lastMessageTimestamp: this.lastMessageTimestamp,
 			lengthIsEstimate: this.lengthIsEstimate,
-			orgId: this.orgId
+			orgId: this.orgId,
+			workspaceUpgraded: this.workspaceUpgraded,
+			sessionContext: this.sessionContext
 		};
 	}
 

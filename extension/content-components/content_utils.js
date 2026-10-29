@@ -1,5 +1,3 @@
-/* global localize, fmtNum, normalizeLocale, setLocaleOverride,
-   modelFamilyFromVersion, defaultModelForTier, defaultModelVersionForTier */
 'use strict';
 
 // Constants
@@ -9,194 +7,32 @@ const SUCCESS_GREEN = "#22c55e";
 
 const SELECTORS = {
 	MODEL_PICKER: '[data-testid="model-selector-dropdown"]',
-	CHAT_MENU: '[data-testid="chat-title-split"]',
+	// "session-title-split" since the merged experience (2026-10).
+	CHAT_MENU: '[data-testid="session-title-split"], [data-testid="chat-title-split"]',
 	MODEL_SELECTOR: '[data-testid="model-selector-dropdown"]',
 	INIT_LOGIN_SCREEN: 'button[data-testid="login-with-google"]',
 	VERIF_LOGIN_SCREEN: 'input[data-testid="code"]'
 };
-// Dynamic debug setting - will be loaded from storage
-let FORCE_DEBUG = true;
-// Load FORCE_DEBUG from storage and set up error handlers
-browser.storage.local.get('force_debug').then(result => {
-	FORCE_DEBUG = result.force_debug || false;
-
-	// Set up error logging based on debug setting
-	if (!FORCE_DEBUG) {
-		window.addEventListener('error', async function (event) {
-			await logError(event.error);
-
-		});
-
-		window.addEventListener('unhandledrejection', async function (event) {
-			await logError(event.reason);
-
-		});
-
-		self.onerror = async function (message, source, lineno, colno, error) {
-			await logError(error);
-			return false;
-		};
-	}
-});
-
 // Global variables that will be shared across all content scripts
 let CONFIG;
 
-// Debug logs are buffered in memory and flushed on a short debounce so logging (which happens inside
-// the per-frame update loop) never blocks on storage. Up to ~1s of logs can be lost on navigation.
-let pendingLogEntries = [];
-let logFlushScheduled = false;
-
-function scheduleLogFlush() {
-	if (logFlushScheduled) return;
-	logFlushScheduled = true;
-	setTimeout(flushLogs, 1000);
-}
-
-async function flushLogs() {
-	logFlushScheduled = false;
-	if (pendingLogEntries.length === 0) return;
-	const batch = pendingLogEntries;
-	pendingLogEntries = [];
-	// Read fresh and append so we don't clobber logs written by other contexts (background / other tabs).
-	try {
-		const result = await browser.storage.local.get('debug_logs');
-		const logs = result.debug_logs || [];
-		logs.push(...batch);
-		while (logs.length > 1000) logs.shift();
-		await browser.storage.local.set({ debug_logs: logs });
-	} catch (e) {
-		try {
-			await browser.storage.local.set({ debug_logs: batch.slice(-100) });
-		} catch (e2) {
-			// Give up — never let logging throw.
-		}
-	}
-}
-
-// Logging function
-async function Log(...args) {
-	const sender = `content:${document.title.substring(0, 20)}${document.title.length > 20 ? '...' : ''}`;
-	let level = "debug";
-
-	// If first argument is a valid log level, use it and remove it from args
-	if (typeof args[0] === 'string' && ["debug", "warn", "error"].includes(args[0])) {
-		level = args.shift();
-	}
-
-	// Gate: when FORCE_DEBUG is off, only log within the debug window. When on, skip the storage read.
-	if (!FORCE_DEBUG) {
-		const result = await browser.storage.local.get('debug_mode_until');
-		const debugUntil = result.debug_mode_until;
-		if (!debugUntil || debugUntil <= Date.now()) return;
-	}
-
-	if (level === "warn") {
-		console.warn("[UsageTracker]", ...args);
-	} else if (level === "error") {
-		console.error("[UsageTracker]", ...args);
-	} else {
-		console.log("[UsageTracker]", ...args);
-	}
-
-	const timestamp = new Date().toLocaleString('default', {
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hour12: false,
-		fractionalSecondDigits: 3
-	});
-
-	let message = args.map(arg => {
-		if (arg instanceof Error) {
-			return arg.stack || `${arg.name}: ${arg.message}`;
-		}
-		if (typeof arg === 'object') {
-			// Handle null case
-			if (arg === null) return 'null';
-			// For other objects, try to stringify with error handling
-			try {
-				return JSON.stringify(arg, Object.getOwnPropertyNames(arg), 2);
-			} catch (e) {
-				return String(arg);
-			}
-		}
-		return String(arg);
-	}).join(' ');
-
-	// Cap per-entry size so a large payload can't bloat storage past quota.
-	const MAX_LOG_MESSAGE = 2000;
-	if (message.length > MAX_LOG_MESSAGE) {
-		message = message.slice(0, MAX_LOG_MESSAGE) + `…[truncated ${message.length - MAX_LOG_MESSAGE} chars]`;
-	}
-
-	// Buffer + debounced flush — no awaited storage I/O in the caller's path.
-	pendingLogEntries.push({ timestamp, sender, level, message });
-	if (pendingLogEntries.length > 1000) pendingLogEntries.shift();
-	scheduleLogFlush();
-}
-
-async function logError(error) {
-	// If object is not an error, log it as a string
-	if (!(error instanceof Error)) {
-		await Log("error", JSON.stringify(error));
-		return
-	}
-
-	await Log("error", error.toString());
-	if ("captureStackTrace" in Error) {
-		Error.captureStackTrace(error, logError);
-	}
-	await Log("error", JSON.stringify(error.stack));
-}
+// Logging (common/log/logger.js): always on, to the console and the debug log viewer. Log(level?, ...args)
+// keeps its old signature; the leading level argument is still accepted.
+configureLogger({ app: 'tracker', prefix: '[UsageTracker]' });
+const Log = createLogger('content');
 
 // Utility functions
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function isIncognitoConversation() {
-	return new URLSearchParams(window.location.search).has('incognito');
+// The conversation being viewed, incognito chats included (common/claude/page.js has the pieces).
+function getCurrentConversationId() {
+	return isIncognito() ? getIncognitoConversationId() : getConversationId();
 }
 
-function getConversationId() {
-	if (isIncognitoConversation()) {
-		try {
-			const data = JSON.parse(sessionStorage.getItem('incognito_temporary_conversation_uuid'));
-			return data?.uuid || null;
-		} catch {
-			return null;
-		}
-	}
-	const match = window.location.pathname.match(/\/chat\/([^/?]+)/);
-	return match ? match[1] : null;
-}
-
-function getActiveOrgId() {
-	return document.cookie.split('; ').find(row => row.startsWith('lastActiveOrg='))?.split('=')[1] || null;
-}
-
-async function sendBackgroundMessage(message) {
-	const enrichedMessage = {
-		...message,
-		orgId: getActiveOrgId()
-	};
-	let counter = 10;
-	while (counter > 0) {
-		try {
-			const response = await browser.runtime.sendMessage(enrichedMessage);
-			return response;
-		} catch (error) {
-			// Check if it's the specific "receiving end does not exist" error
-			if (error.message?.includes('Receiving end does not exist')) {
-				await Log("warn", 'Background script not ready, retrying...', error);
-				await sleep(200);
-			} else {
-				// For any other error, throw immediately
-				throw error;
-			}
-		}
-		counter--;
-	}
-	throw new Error("Failed to send message to background script after 10 retries.");
+// Every message carries the active org. The retry while the background wakes up lives in
+// common/ext/bridge-isolated.js.
+function sendBackgroundMessage(message) {
+	return ClaudeExtBridge.sendBackgroundMessage('tracker', { ...message, orgId: getActiveOrgId() });
 }
 
 // Encode bytes as base64 (chunked to avoid stack overflow on large file downloads). Used to ship
@@ -211,6 +47,13 @@ function bytesToBase64(buffer) {
 	return btoa(binary);
 }
 
+// A token count in the UI language's compact form (1M, 500K; "1 Mio." in German), for context
+// windows. The full-digit form is common's fmtNum.
+let compactNumberFormat = null;
+function fmtCompactNum(n) {
+	return (compactNumberFormat ??= new Intl.NumberFormat(currentLocale(), { notation: 'compact' })).format(Number(n));
+}
+
 // Brave hides containers from extension APIs, so the background can't read this container's cookies.
 // Tell it whether we're on Brave; if so, it proxies claude.ai fetches back through this tab.
 async function reportBraveStatus() {
@@ -220,6 +63,15 @@ async function reportBraveStatus() {
 	} catch (e) {
 		await Log("warn", "Brave detection failed:", e);
 	}
+}
+
+// A fresh login can render the app before claude.ai sets the lastActiveOrg cookie, and both
+// requests are per org: sent with none, they'd fetch /organizations/null/usage.
+async function requestInitialData() {
+	if (!getActiveOrgId()) await Log('No org cookie yet, waiting for it before requesting data');
+	while (!getActiveOrgId()) await sleep(500);
+	sendBackgroundMessage({ type: 'requestData' });
+	sendBackgroundMessage({ type: 'initOrg' });
 }
 
 async function waitForElement(target, selector, maxTime = 1000) {
@@ -235,46 +87,113 @@ async function waitForElement(target, selector, maxTime = 1000) {
 	return null;
 }
 
-// subscriptionTier decides the default when the picker can't be read - claude.ai defaults
-// Max to Opus and everyone else to Sonnet. Pass null if the tier isn't known yet.
-async function getCurrentModel(maxWait = 3000, subscriptionTier = null) {
+// An unreadable picker is a standing condition, not an event: checkModelChange re-reads it every
+// highUpdateFrequency ms off the rAF loop, so logging unconditionally would fill debug_logs with
+// the same line hundreds of times a minute. Warn once per distinct label instead.
+let lastWarnedPickerLabel = null;
+function warnUnreadablePickerOnce(label) {
+	if (label === lastWarnedPickerLabel) return;
+	lastWarnedPickerLabel = label;
+	Log("warn", "Model picker present but no known model in its label:", label);
+}
+
+// The API model id the NEXT message will use, read out of the picker. Three answers:
+//   a model id    - the picker is there and names a model we know
+//   MODEL_UNKNOWN - the picker is there but we can't make sense of it (see below)
+//   null          - there is no picker to read
+async function getCurrentModelVersion(maxWait = 3000) {
 	const modelSelector = await waitForElement(document, SELECTORS.MODEL_PICKER, maxWait);
-	if (!modelSelector) return defaultModelForTier(subscriptionTier);
+	// No picker: null, "not observed", and NOT the tier default. This used to return claude.ai's
+	// default picker selection for the plan, which on Max is Opus, so any poll that found the
+	// control unmounted (it is re-rendered with the composer; the reports were Fable conversations
+	// read as Opus during long tool-heavy responses, and this was the only path that could produce
+	// that) reported a "model change": the message was re-priced at the Opus weight and, since
+	// isCurrentlyCached compares the reading against the conversation's own model, the cache
+	// indicator vanished. A missing control is not evidence of anything; null lets every consumer
+	// fall back to what the conversation itself says.
+	if (!modelSelector) return null;
 
-	const fullModelName = modelSelector.querySelector('.whitespace-nowrap')?.textContent?.trim();
-	if (!fullModelName) return defaultModelForTier(subscriptionTier);
+	// Read the BUTTON's own label rather than a descendant styling class. claude.ai's CDS redesign
+	// moved `whitespace-nowrap` from an inner span onto the button itself, and querySelector never
+	// matches the element it is called on - so the old lookup silently returned null and every
+	// conversation was reported as the tier's default model, which killed cache tracking on every
+	// chat not using that model. aria-label is the primary source (semantic, and required for a11y);
+	// textContent is the backup.
+	const label = (modelSelector.getAttribute('aria-label') || modelSelector.textContent || '')
+		.trim().toLowerCase();
 
-	const matchedModel = modelFamilyFromVersion(fullModelName);
-	if (matchedModel) return matchedModel;
+	// Longest key first so "opus 4.5" wins over "opus 4" without depending on the insertion order of
+	// MODEL_VERSION_MAP. `includes` rather than `startsWith` because the label carries decoration on
+	// both sides: "Model: " in front, the effort level ("High", "Medium") behind.
+	const matchedModel = Object.keys(CONFIG.MODEL_VERSION_MAP)
+		.sort((a, b) => b.length - a.length)
+		.find(key => label.includes(key));
+	if (matchedModel) return CONFIG.MODEL_VERSION_MAP[matchedModel];
 
-	await Log("Could not find matching model, returning default")
-	return defaultModelForTier(subscriptionTier);
+	// Picker is there but unreadable - restyled again, or a model we don't ship a label for yet.
+	// MODEL_UNKNOWN, not the tier default and not a bare null: it says "we looked and could not
+	// tell", which isCurrentlyCached treats as a reason to withhold the cache claim rather than as
+	// permission to skip the check. A confident wrong guess instead disables cache tracking with no
+	// visible symptom - which is exactly how this rotted last time.
+	warnUnreadablePickerOnce(label);
+	return MODEL_UNKNOWN;
 }
 
-async function getCurrentModelVersion(maxWait = 3000, subscriptionTier = null) {
+// The effort/thinking selection shown after the model in the picker: "Model: Opus 5 · High".
+//
+// Returned as the RAW label, lowercased, and NOT mapped to an API value - deliberately. claude.ai
+// renders these through react-intl (Low/Medium/High/Extra/Max on models with an effort ladder,
+// thinking-mode wording like "Extended" on those without), so the visible word tracks the account
+// language while the API values do not - and they don't line up anyway: "Extra" is `xhigh` in the
+// request body. Mapping label -> API value would mean shipping claude.ai's translations of five
+// strings across nine locales and keeping them in sync forever.
+//
+// We never need the value itself, only whether it CHANGED since the cache was written, and both
+// sides of that comparison are taken from this same string - see isCurrentlyCached. The background
+// can't supply it either: switching effort inside a conversation fires no request at all, and the
+// choice is ephemeral React state that reverts to the conversation's own effort on reload. That
+// reversion is what makes the reading at data-arrival time a valid baseline.
+//
+// aria-label only. textContent renders as "Opus 5 High" with no separator, so there is nothing to
+// split on there. null means "not observed" - no picker, no label, or a model with no selector at
+// all - which isCurrentlyCached treats as no opinion rather than as a change.
+async function getCurrentEffortLabel(maxWait = 3000) {
 	const modelSelector = await waitForElement(document, SELECTORS.MODEL_PICKER, maxWait);
-	if (!modelSelector) return defaultModelVersionForTier(subscriptionTier);
-	const text = modelSelector.querySelector('.whitespace-nowrap')?.textContent?.trim();
-    if (!text) return defaultModelVersionForTier(subscriptionTier);
-    const normalizedText = text.toLowerCase();
-    const matchedModel = Object.keys(CONFIG.MODEL_VERSION_MAP).find(key => normalizedText.startsWith(key));
-	return matchedModel ? CONFIG.MODEL_VERSION_MAP[matchedModel] : defaultModelVersionForTier(subscriptionTier);
+	if (!modelSelector) return null;
+
+	const label = modelSelector.getAttribute('aria-label');
+	if (!label) return null;
+
+	const separator = label.indexOf('·');
+	if (separator === -1) return null;
+
+	return label.slice(separator + 1).trim().toLowerCase() || null;
 }
 
-function isMobileView() {
-	return matchMedia('(pointer: coarse)').matches && window.innerWidth < 768;
-}
-
-function isCodePage() {
-	return window.location.pathname.includes('claude-code-desktop') || window.location.pathname.includes('/code');
+// Model family (Opus/Sonnet/...) for the picker's selection. Delegates so there is one parser.
+//
+// Returns null - not MODEL_UNKNOWN - when the model can't be identified, and that asymmetry with
+// getCurrentModelVersion is deliberate. This value picks the limits and the fallback price family
+// for a cost estimate, where null makes the consumers fall back to the conversation's own model;
+// handing them MODEL_UNKNOWN would instead land on FALLBACK_MODEL_WEIGHT and price every unknown
+// model as Opus. Estimates may degrade to something plausible, but the cache claim may not - see
+// isCurrentlyCached.
+async function getCurrentModel(maxWait = 3000) {
+	const modelVersion = await getCurrentModelVersion(maxWait);
+	if (!modelVersion || modelVersion === MODEL_UNKNOWN) return null;
+	return modelFamilyFromVersion(modelVersion);
 }
 
 
 // Which pieces of the sidebar section the user wants shown. Purely content-side UI state — the
 // background never reads it — so it lives in storage.local directly, like usageSectionCollapsed.
-// Keys are limit keys ('session', 'weekly', 'fableWeekly', 'extraUsage') plus 'desktopLink'.
+// Keys are limit keys ('session', 'weekly', 'fableWeekly', 'extraUsage').
 // A missing key means visible, so an empty object is the default "show everything".
 const SIDEBAR_DISPLAY_KEY = 'sidebarDisplay';
+
+// Whether the LengthUI stats (length / cost / cached / messages left) are shown at all. Content-side
+// only, like usageSectionCollapsed: LengthUI reads it once at boot and never mounts when it's set.
+const LENGTH_DISPLAY_KEY = 'lengthDisplayHidden';
 
 async function getSidebarDisplayPrefs() {
 	const stored = await browser.storage.local.get(SIDEBAR_DISPLAY_KEY);
@@ -293,25 +212,27 @@ function isSidebarItemVisible(prefs, key) {
 }
 
 
-// Pin the active UI locale and persist it as lastLang so the popup and background (which have
-// no claude.ai DOM) can localize too. Normally fetched from /api/account_profile at boot. But
-// right after a language change, the background pins the authoritative value (from the PUT body)
-// with a short TTL — within that window we trust it and skip the GET, because the GET can briefly
-// lag behind the change. Falls back to the stored value, then English.
+// The UI language comes from common/i18n (shared with Claude QoL: see i18n-core.js). Before that,
+// the tracker kept its own override in storage.local; move it over once, if the user hasn't picked a
+// language in the shared picker since. Awaited before anything localizes a card or the settings.
+const localeReady = (async () => {
+	try {
+		const { languageOverride } = await browser.storage.local.get('languageOverride');
+		if (languageOverride === undefined) return;
+		if (languageOverride && !getLanguageOverride()) {
+			setLanguageOverride(languageOverride);
+			pinLocale(languageOverride); // in case something already localized with the old locale
+		}
+		await browser.storage.local.remove('languageOverride');
+	} catch (e) { /* nothing to migrate */ }
+})();
+
+// Persist the resolved language as lastLang, for the popup and background (which can't see
+// claude.ai's localStorage), and keep the shared account locale cache fresh.
 async function applyLocale() {
-	const stored = await browser.storage.local.get(['lastLang', 'lastLangPinnedUntil', 'languageOverride']);
-	let norm;
-	if (stored.languageOverride) {
-		// Explicit user choice wins over everything: skip the account fetch and the PUT pin.
-		norm = normalizeLocale(stored.languageOverride);
-	} else if (stored.lastLangPinnedUntil && Date.now() < stored.lastLangPinnedUntil) {
-		norm = normalizeLocale(stored.lastLang || 'en');
-	} else {
-		const acc = await sendBackgroundMessage({ type: 'getAccountLocale' });
-		norm = normalizeLocale(acc || stored.lastLang || 'en');
-	}
-	setLocaleOverride(norm);
-	await browser.storage.local.set({ lastLang: norm });
+	await localeReady;
+	refreshAccountLocale();
+	await browser.storage.local.set({ lastLang: currentLocale() });
 }
 
 function getResetTimeHTML(timeInfo) {
@@ -339,124 +260,6 @@ function getResetTimeHTML(timeInfo) {
 	return `${prefix} <span style="color: ${BLUE_HIGHLIGHT}">${timeString}</span>`;
 }
 
-// Tooltips use the CDS color vars (--cds-tooltip-bg/-fg), which are scoped to .cds-root.
-// Append them into a dedicated portal so the vars resolve outside claude.ai's own roots.
-let _tooltipPortal = null;
-function getTooltipPortal() {
-	if (_tooltipPortal && _tooltipPortal.isConnected) return _tooltipPortal;
-
-	const existing = document.querySelector('.cds-root[data-cds-portal]');
-	if (existing) {
-		_tooltipPortal = existing;
-		return _tooltipPortal;
-	}
-
-	const reference = document.querySelector('.cds-root');
-	const portal = document.createElement('div');
-	portal.className = 'cds-root pointer-events-none';
-	portal.setAttribute('data-cds-portal', '');
-
-	if (reference) {
-		for (const attr of ['data-density', 'data-mode', 'data-platform', 'data-font']) {
-			const val = reference.getAttribute(attr);
-			if (val) portal.setAttribute(attr, val);
-		}
-	}
-
-	document.body.appendChild(portal);
-	_tooltipPortal = portal;
-	return _tooltipPortal;
-}
-
-function setupTooltip(element, tooltip, options = {}) {
-	if (!element || !tooltip) return;
-
-	// Check if already set up
-	if (element.hasAttribute('data-tooltip-setup')) {
-		return;
-	}
-	element.setAttribute('data-tooltip-setup', 'true');
-
-	const { topOffset = 10 } = options;
-
-	// Add standard classes for all tooltip elements
-	element.classList.add('ut-tooltip-trigger', 'ut-info-item');
-	element.style.cursor = 'help';
-
-
-	let pressTimer;
-	let tooltipHideTimer;
-
-	const showTooltip = () => {
-		const rect = element.getBoundingClientRect();
-		tooltip.style.opacity = '1';
-		const tooltipRect = tooltip.getBoundingClientRect();
-
-		let leftPos = rect.left + (rect.width / 2);
-		if (leftPos + (tooltipRect.width / 2) > window.innerWidth) {
-			leftPos = window.innerWidth - tooltipRect.width - 10;
-		}
-		if (leftPos - (tooltipRect.width / 2) < 0) {
-			leftPos = tooltipRect.width / 2 + 10;
-		}
-
-		let topPos = rect.top - tooltipRect.height - topOffset;
-		if (topPos < 10) {
-			topPos = rect.bottom + 10;
-		}
-
-		tooltip.style.left = `${leftPos}px`;
-		tooltip.style.top = `${topPos}px`;
-		tooltip.style.transform = 'translateX(-50%)';
-	};
-
-	const hideTooltip = () => {
-		tooltip.style.opacity = '0';
-		clearTimeout(tooltipHideTimer);
-	};
-
-	// Pointer events work for both mouse and touch
-	element.addEventListener('pointerdown', (e) => {
-
-		if (e.pointerType === 'touch' || isMobileView()) {
-			// Touch/mobile: long press
-			pressTimer = setTimeout(() => {
-				showTooltip();
-
-				// Auto-hide after 3 seconds
-				tooltipHideTimer = setTimeout(hideTooltip, 3000);
-			}, 500);
-		}
-		// Mouse is handled by enter/leave below
-	});
-
-	element.addEventListener('pointerup', (e) => {
-		if (e.pointerType === 'touch' || isMobileView()) {
-			clearTimeout(pressTimer);
-		}
-	});
-
-	element.addEventListener('pointercancel', (e) => {
-		clearTimeout(pressTimer);
-		hideTooltip();
-	});
-
-	// Keep mouse hover for desktop
-	if (!isMobileView()) {
-		element.addEventListener('pointerenter', (e) => {
-			if (e.pointerType === 'mouse') {
-				showTooltip();
-			}
-		});
-
-		element.addEventListener('pointerleave', (e) => {
-			if (e.pointerType === 'mouse') {
-				hideTooltip();
-			}
-		});
-	}
-}
-
 // Progress bar component
 class ProgressBar {
 	constructor(options = {}) {
@@ -477,20 +280,17 @@ class ProgressBar {
 		this.bar.className = 'ut-progress-bar';
 		this.bar.style.background = BLUE_HIGHLIGHT;
 
-		this.tooltip = document.createElement('div');
-		this.tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip shadow-sm dark:shadow-panel-sm';
-
 		this.track.appendChild(this.bar);
 		this.container.appendChild(this.track);
-		getTooltipPortal().appendChild(this.tooltip);
-		setupTooltip(this.container, this.tooltip, { topOffset: 10 });
+		this.container.style.cursor = 'help';
+		this.tooltip = createClaudeTooltip(this.container, '');
 	}
 
 	updateProgress(total, maxTokens) {
 		const percentage = (total / maxTokens) * 100;
 		this.bar.style.width = `${Math.min(percentage, 100)}%`;
 		this.bar.style.background = total >= maxTokens * CONFIG.WARNING.PERCENT_THRESHOLD ? RED_WARNING : BLUE_HIGHLIGHT;
-		this.tooltip.textContent = localize('usage.bar_credits', { used: fmtNum(total), total: fmtNum(maxTokens), pct: percentage.toFixed(1) });
+		this.tooltip.updateText(localize('usage.bar_credits', { used: fmtNum(total), total: fmtNum(maxTokens), pct: percentage.toFixed(1) }));
 	}
 
 	setMarker(percentage, label) {
@@ -502,14 +302,12 @@ class ProgressBar {
 			this.container.style.marginTop = '-10px';
 			this.container.appendChild(this.marker);
 
-			this.markerTooltip = document.createElement('div');
-			this.markerTooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip shadow-sm dark:shadow-panel-sm';
-			getTooltipPortal().appendChild(this.markerTooltip);
-			setupTooltip(this.marker, this.markerTooltip);
+			this.marker.style.cursor = 'help';
+			this.markerTooltip = createClaudeTooltip(this.marker, '');
 		}
 		this.marker.style.left = `${Math.min(percentage, 100)}%`;
 		this.marker.style.display = 'block';
-		if (label) this.markerTooltip.textContent = label;
+		if (label) this.markerTooltip.updateText(label);
 	}
 
 	clearMarker() {
@@ -530,9 +328,12 @@ browser.runtime.onMessage.addListener(async (message) => {
 		return Promise.resolve({ orgId: getActiveOrgId() });
 	}
 	if (message.type === 'proxyFetch') {
-		// Brave: perform a fetch in this tab's container context and ship the result to the background.
+		// A fetch made as this page and shipped back to the background: Brave's transport (this tab's
+		// container) and every platform's page fetch (see ContainerStrategy.pageFetchFor). Firefox's
+		// content-script fetch carries the extension's origin; content.fetch is the page's own.
 		try {
-			const r = await fetch(message.url, { ...(message.options || {}), credentials: 'include' });
+			const pageFetch = globalThis.content?.fetch ? (...args) => globalThis.content.fetch(...args) : fetch;
+			const r = await pageFetch(message.url, { ...(message.options || {}), credentials: 'include' });
 			const buf = await r.arrayBuffer();
 			return { ok: r.ok, status: r.status, statusText: r.statusText, body: bytesToBase64(buf) };
 		} catch (e) {
@@ -597,8 +398,13 @@ function getSidebarDesktopAnchor() {
 	// viewport the recents collapsed to a few pixels and our own content overflowed onto the
 	// bottom tray, with no way to scroll any of it back. Inside, everything scrolls together.
 	// shrink-0 keeps the bars at full height instead of being squashed by the flex column.
-	const referenceNode = Array.from(navScroll.children)
-		.find(child => !child.classList.contains('ut-usage-sidebar')) || null;
+	// The Projects/Artifacts/... links now sit inside the scroll area too, ahead of the recents,
+	// so anchor on the recents block to land below the links. When the recents block isn't
+	// rendered (e.g. an account with no chats yet), the first non-extension child is the links
+	// block itself, so go after it instead; a null referenceNode appends.
+	const recents = navScroll.querySelector(':scope > .dframe-recents-by-mode');
+	const navLinks = Array.from(navScroll.children).find(child => !child.classList.contains('ut-usage-sidebar'));
+	const referenceNode = recents || navLinks?.nextElementSibling || null;
 
 	return {
 		parent: navScroll,
@@ -608,11 +414,32 @@ function getSidebarDesktopAnchor() {
 }
 
 function getChatAreaRegularAnchor() {
+	// Redesigned composer (2026-08): a rounded bg-surface-3 box whose single flow child holds the
+	// input, with the controls either absolutely positioned inside that child (home page) or moved
+	// out to a footer row below the box entirely (conversation view). Neither the picker nor a
+	// full-width toolbar row is a reliable anchor any more — the old `.flex.w-full.items-center`
+	// closest() from the picker walks past the box and false-matches the whole page column,
+	// stranding the stat line at the bottom of the page. Resolve from the input instead and sit
+	// after the flow child, which stacks the line inside the box beneath the input in both views.
+	// claude.ai/code's composer is the same box around its own input.
+	const chatInput = document.querySelector('[data-testid="chat-input"], [data-testid="code-prompt-input"]');
+	const composerFlowChild = chatInput?.closest('.bg-surface-3 > .relative.w-full.min-w-0');
+	if (composerFlowChild) {
+		return {
+			insertAfter: composerFlowChild,
+			styles: { paddingLeft: '6px', paddingRight: '', paddingBottom: '' },
+		};
+	}
+
+	// Pre-redesign composer: the picker sits in a full-width flex toolbar row. A real toolbar row
+	// sits beside the input, never around it — so a match that contains the input is the redesign's
+	// failure mode (the selector walking up to the whole page column), and mounting nothing beats
+	// mounting the line at the bottom of the page.
 	const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
 	if (!modelSelector) return null;
 
 	const toolbarRow = modelSelector.closest('.flex.w-full.items-center');
-	if (!toolbarRow) return null;
+	if (!toolbarRow || (chatInput && toolbarRow.contains(chatInput))) return null;
 
 	return {
 		insertAfter: toolbarRow,
@@ -626,15 +453,34 @@ function getChatAreaRegularAnchor() {
 // muted-text class explicitly, so nothing the previous anchor set can survive the move.
 const TITLE_AREA_STYLE_RESET = {
 	flexBasis: '',
+	width: '',
+	maxWidth: '',
+	alignSelf: '',
 	marginTop: '',
+	marginBottom: '',
 	marginLeft: '',
+	left: '',
+	lineHeight: '',
 	paddingLeft: '',
+	paddingRight: '',
+	paddingBottom: '',
 	position: '',
 	top: '',
 	zIndex: '',
 	minWidth: '',
 	overflow: '',
 	whiteSpace: '',
+	textOverflow: '',
+};
+
+// One line, clipped with an ellipsis. Our line must never wrap in a header: they are fixed-height
+// rows that centre their content, so every extra line grows the title group and centring pushes the
+// chat title up past the top edge of the window.
+const TITLE_AREA_SINGLE_LINE = {
+	minWidth: '0',
+	overflow: 'hidden',
+	whiteSpace: 'nowrap',
+	textOverflow: 'ellipsis',
 };
 
 // Mobile headers are position:absolute with a fixed height, so forcing our line onto a
@@ -670,7 +516,7 @@ function getMobileTitleAreaAnchor(headerRow) {
 			top: '-8px',
 			zIndex: '11', // above the header's gradient overlay
 		},
-		classes: { toggle: { 'text-text-500': true, 'bg-bg-100': false, '!px-2': false } },
+		classes: { toggle: { 'text-text-500': true, 'bg-bg-100': false, 'bg-surface-1': false, '!px-2': false } },
 	};
 }
 
@@ -705,6 +551,126 @@ function getTitleTextInset(titleLine) {
 	return Math.max(0, Math.round(btnRect.left + padding - wrapperLeft));
 }
 
+// The strip: a band directly under claude.ai's header, the whole column wide. Used on desktop when
+// the line doesn't fit in the header, and always on phones. It used to be the normal-flow slot after
+// .dframe-below-header-banner, which claude.ai has since dropped (2026-10), so the line now hangs
+// from the header itself: its last child, positioned just below it. The header is absolute over the
+// message list, which starts below it, so nothing in the flow moves. Null without a header.
+function getTitleStripAnchor(titleLine) {
+	const header = titleLine.closest('.dframe-header');
+	if (!header) return null;
+
+	// Line up with the title's glyphs, measured against the header's left edge.
+	const btn = titleLine.querySelector('button');
+	const btnRect = btn?.getBoundingClientRect();
+	const column = header.getBoundingClientRect();
+	const inset = btnRect?.width
+		? Math.max(0, Math.round(btnRect.left + (parseFloat(getComputedStyle(btn).paddingLeft) || 0) - column.left))
+		: parseFloat(getComputedStyle(header).paddingLeft) || 0;
+
+	// The strip must end before anything else the header hangs down into this band - Claude QoL's
+	// phone buttons do, at the right edge. Shrinking to the text isn't enough on its own: a long line
+	// (German, with the cache timer) fills the column. Found by geometry rather than by class name: a
+	// header descendant that reaches below the header, sits right of where our text starts, and is
+	// narrower than the column (which rules out the header's full-width gradient backdrop). Our own
+	// line is a header descendant too, so it's skipped.
+	const bandTop = column.bottom;
+	const BAND_HEIGHT = 32;
+	let freeRight = column.right;
+	for (const el of header.querySelectorAll('*')) {
+		if (el.closest('.ut-title-stats')) continue;
+		const r = el.getBoundingClientRect();
+		if (!r.width || r.bottom <= bandTop + 1 || r.top >= bandTop + BAND_HEIGHT) continue;
+		if (r.left <= column.left + inset || r.width >= column.width * 0.6) continue;
+		freeRight = Math.min(freeRight, r.left);
+	}
+	const maxWidth = freeRight < column.right ? `${Math.max(0, Math.floor(freeRight - column.left - 8))}px` : '100%';
+
+	return {
+		isStrip: true,
+		parent: header,
+		referenceNode: null,
+		styles: {
+			...TITLE_AREA_STYLE_RESET,
+			...TITLE_AREA_SINGLE_LINE,
+			position: 'absolute',
+			top: '100%',
+			left: '0',
+			paddingLeft: `${inset}px`,
+			paddingRight: '6px',
+			paddingBottom: '4px',
+			// Only as wide as the text (an absolute box shrinks to fit), and opaque so the messages
+			// scrolling up beneath don't show through it.
+			maxWidth,
+		},
+		classes: { toggle: { 'text-text-500': true, 'bg-surface-1': true, 'bg-bg-100': false, '!px-2': false } },
+	};
+}
+
+// Mobile titleArea. Phones now get the same .dframe-header layout as desktop, which has none of the
+// structure getMobileTitleAreaAnchor looks for, so it found nothing and the line silently never
+// mounted. There is no room in a phone's header anyway, so go straight to the strip; the legacy
+// anchor stays as the fallback for the older layout.
+function getPhoneTitleAreaAnchor(titleLine, headerRow) {
+	const strip = getTitleStripAnchor(titleLine);
+	if (strip) {
+		clearMobileTitleAreaOffset(headerRow);
+		return strip;
+	}
+	return getMobileTitleAreaAnchor(headerRow);
+}
+
+// Desktop titleArea: our own full-width line under the title, inside claude.ai's header.
+//
+// That header shares its row with the page's actions and with other extensions' buttons (Claude
+// QoL puts up to seven there), and the title group is the only thing in it allowed to shrink, so a
+// narrow window leaves it very little width. The header is also fixed-height, so the line can't just
+// wrap there (see TITLE_AREA_SINGLE_LINE). When it doesn't fit, `strip` is where it goes instead
+// (see getTitleStripAnchor). LengthUI decides between the two (see mountTitleArea). `strip` is null
+// on a layout without that slot, and the line then stays in the header and truncates.
+// Our title line's height (text-xs).
+const TITLE_LINE_HEIGHT = 16;
+
+function getDesktopTitleAreaAnchor(titleLine, headerRow) {
+	clearMobileTitleAreaOffset(headerRow);
+	titleLine.classList.add('flex-wrap');
+
+	const strip = getTitleStripAnchor(titleLine);
+
+	// Claude Desktop puts the title in the window's title bar, 36px tall (the browser's header is
+	// 48px): too short for the title button's 28px plus our 16, and the centred pair would clip the
+	// title at the top. So our line tucks a little into the button's bottom padding (12px line height
+	// for 12px text, 3px up), and a negative bottom margin keeps most of it out of the centring: the
+	// pair counts as 4px shorter than the bar, which sets the title 2px below the top edge, and our
+	// line hangs a few pixels below the bar (it doesn't clip). Tucking it further up to fit instead
+	// presses the two lines together.
+	const header = titleLine.closest('[data-testid="chat-header"]') ?? titleLine.parentElement;
+	const title = titleLine.querySelector('button');
+	const barHeight = header?.clientHeight ?? 0;
+	const tighten = title && title.offsetHeight + TITLE_LINE_HEIGHT > barHeight
+		? { lineHeight: '12px', marginTop: '-3px', marginBottom: `${barHeight - 4 - (title.offsetHeight + 12 - 3)}px` }
+		: {};
+
+	return {
+		parent: titleLine,
+		referenceNode: null,
+		styles: {
+			...TITLE_AREA_STYLE_RESET,
+			...TITLE_AREA_SINGLE_LINE,
+			flexBasis: '100%',
+			// The claim already states how wide the line wants to be (see LengthUI's claim). A
+			// wrapping flex row's preferred width is the SUM of its items' widths, so if the line
+			// counted as well the title group would claim the line's width twice and swallow the free
+			// space other header occupants need to see. The basis still stretches it at layout.
+			width: '0',
+			paddingLeft: `${getTitleTextInset(titleLine)}px`,
+			...tighten,
+		},
+		classes: { toggle: { 'text-text-500': true, 'bg-surface-1': false } },
+		strip,
+	};
+}
+
 function getTitleAreaAnchor() {
 	const chatTitle = document.querySelector(SELECTORS.CHAT_MENU);
 	if (!chatTitle) return null;
@@ -714,25 +680,16 @@ function getTitleAreaAnchor() {
 
 	const headerRow = titleLine.parentElement;
 
-	if (isMobileView()) {
-		return getMobileTitleAreaAnchor(headerRow);
-	} else {
-		clearMobileTitleAreaOffset(headerRow);
-		titleLine.classList.add('flex-wrap');
-
-		return {
-			parent: titleLine,
-			referenceNode: null,
-			styles: { ...TITLE_AREA_STYLE_RESET, flexBasis: '100%', paddingLeft: `${getTitleTextInset(titleLine)}px` },
-			classes: { toggle: { 'text-text-500': true } }
-		};
+	if (isMobileLayout()) {
+		return getPhoneTitleAreaAnchor(titleLine, headerRow);
 	}
+	return getDesktopTitleAreaAnchor(titleLine, headerRow);
 }
 
 const pageLayouts = {
 	// Desktop client layouts (checked first — desktop has dframe-sidebar, not nav.flex)
 	desktopChat: {
-		match() { return !!document.querySelector('aside.dframe-sidebar') && !isCodePage() && !!getConversationId(); },
+		match() { return !!document.querySelector('aside.dframe-sidebar') && !isCodePage() && !!getCurrentConversationId(); },
 		anchors: {
 			sidebar: getSidebarDesktopAnchor,
 			chatArea: getChatAreaRegularAnchor,
@@ -740,24 +697,15 @@ const pageLayouts = {
 				const chatTitle = document.querySelector(SELECTORS.CHAT_MENU);
 				if (!chatTitle) return null;
 
-				const titleLine = chatTitle.closest('.font-base-bold') || chatTitle.parentElement;
+				const titleLine = chatTitle.closest('.font-base-bold, .font-base') || chatTitle.parentElement;
 				if (!titleLine) return null;
 
 				const headerRow = titleLine.parentElement;
 
-				if (isMobileView()) {
-					return getMobileTitleAreaAnchor(headerRow);
-				} else {
-					clearMobileTitleAreaOffset(headerRow);
-					titleLine.classList.add('flex-wrap');
-
-					return {
-						parent: titleLine,
-						referenceNode: null,
-						styles: { ...TITLE_AREA_STYLE_RESET, flexBasis: '100%', paddingLeft: `${getTitleTextInset(titleLine)}px` },
-						classes: { toggle: { 'text-text-500': true } },
-					};
+				if (isMobileLayout()) {
+					return getPhoneTitleAreaAnchor(titleLine, headerRow);
 				}
+				return getDesktopTitleAreaAnchor(titleLine, headerRow);
 			},
 		},
 	},
@@ -783,7 +731,7 @@ const pageLayouts = {
 		},
 	},
 	desktopHome: {
-		match() { return !!document.querySelector('aside.dframe-sidebar') && !isCodePage() && !getConversationId(); },
+		match() { return !!document.querySelector('aside.dframe-sidebar') && !isCodePage() && !getCurrentConversationId(); },
 		anchors: {
 			sidebar: getSidebarDesktopAnchor,
 			chatArea: getChatAreaRegularAnchor,
@@ -791,7 +739,7 @@ const pageLayouts = {
 	},
 	// Web layouts
 	chat: {
-		match() { return !isCodePage() && !isIncognitoConversation() && !!getConversationId(); },
+		match() { return !isCodePage() && !isIncognito() && !!getCurrentConversationId(); },
 		anchors: {
 			sidebar: getSidebarRegularAnchor,
 			chatArea: getChatAreaRegularAnchor,
@@ -802,6 +750,9 @@ const pageLayouts = {
 		match() { return isCodePage(); },
 		anchors: {
 			sidebar() {
+				// The current /code page runs in the same dframe shell as the chat UI.
+				if (document.querySelector('aside.dframe-sidebar')) return getSidebarDesktopAnchor();
+
 				const sidebarNav = document.querySelector('nav.flex');
 
 				if (sidebarNav) {
@@ -832,6 +783,9 @@ const pageLayouts = {
 				};
 			},
 			chatArea() {
+				const current = getChatAreaRegularAnchor();
+				if (current) return current;
+
 				const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
 				if (!modelSelector) return null;
 
@@ -847,14 +801,14 @@ const pageLayouts = {
 	},
 	incognitoConversation: {
 		// Incognito conversations have no convID in the URL and a special sessionStorage key for it instead, but otherwise behave like regular chats.
-		match() { return isIncognitoConversation(); },
+		match() { return isIncognito(); },
 		anchors: {
 			sidebar: getSidebarRegularAnchor,
 			chatArea: getChatAreaRegularAnchor,
 			titleArea() {
 				// The label used to live under .z-header, which no longer exists - it now sits
 				// in a fixed title bar. Matched structurally rather than by its text: the layout
-				// is already gated on isIncognitoConversation(), so testing for "Incognito chat"
+				// is already gated on isIncognito(), so testing for "Incognito chat"
 				// bought nothing and broke in every locale but English.
 				const label = document.querySelector('.fixed.draggable > .text-sm.select-none');
 				if (!label) return null;
@@ -872,13 +826,13 @@ const pageLayouts = {
 					},
 					// Drop the muted class so the text inherits the bar's own colour - it themes
 					// independently of the page body.
-					classes: { toggle: { 'text-text-500': false, 'bg-bg-100': false } },
+					classes: { toggle: { 'text-text-500': false, 'bg-bg-100': false, 'bg-surface-1': false } },
 				};
 			},
 		},
 	},
 	home: {
-		match() { return !isCodePage() && !getConversationId(); },
+		match() { return !isCodePage() && !getCurrentConversationId(); },
 		anchors: {
 			sidebar: getSidebarRegularAnchor,
 			chatArea: getChatAreaRegularAnchor,
@@ -943,7 +897,7 @@ async function initExtension() {
 	}
 	window.claudeTrackerInstance = true;
 
-	// Report Brave status before any ClaudeAPI-backed call (e.g. getAccountLocale below) so the
+	// Report Brave status before any ClaudeAPI-backed call so the
 	// background knows to proxy claude.ai fetches through this tab's container.
 	await reportBraveStatus();
 
@@ -954,9 +908,9 @@ async function initExtension() {
 
 	await injectStyles();
 
-	// Resolve the account UI language and pin it BEFORE assigning CONFIG. UI scripts gate their
-	// construction on CONFIG, so pinning the locale first means every static string (sidebar
-	// header, tooltips) is built in the right language.
+	// Settle the UI language (the one-time override migration) BEFORE assigning CONFIG. UI scripts
+	// gate their construction on CONFIG, so every static string (sidebar header, tooltips) is built
+	// in the right language.
 	const cfg = await sendBackgroundMessage({ type: 'getConfig' });
 	await applyLocale();
 	CONFIG = cfg;
@@ -964,10 +918,9 @@ async function initExtension() {
 
 	// Incognito conversations never have the standard sidebar structure.
     // Skip the 6-second wait to avoid a spurious warning and wasted polling.
-    if (new URLSearchParams(window.location.search).has('incognito')) {
+    if (isIncognito()) {
         await Log('Incognito mode: skipping sidebar anchor wait');
-        sendBackgroundMessage({ type: 'requestData' });
-        sendBackgroundMessage({ type: 'initOrg' });
+        await requestInitialData();
         await Log('Initialization complete. Ready to track tokens.');
         return;
     }
@@ -1005,9 +958,7 @@ async function initExtension() {
 		await sleep(LOGIN_CHECK_DELAY);
 	}
 
-	// Request initial data
-	sendBackgroundMessage({ type: 'requestData' });
-	sendBackgroundMessage({ type: 'initOrg' });
+	await requestInitialData();
 
 	await Log('Initialization complete. Ready to track tokens.');
 }

@@ -1,8 +1,3 @@
-/* global CONFIG, Log, ProgressBar, sendBackgroundMessage, getActiveOrgId,
-   setupTooltip, getTooltipPortal, getResetTimeHTML, sleep, isMobileView, isCodePage, UsageData, isPeakHours,
-   RED_WARNING, BLUE_HIGHLIGHT, SUCCESS_GREEN, SELECTORS, LayoutManager, mountToAnchor,
-   localize, fmtNum, localeForIntl, onSsePartialUsage, shouldApplySseSession,
-   SIDEBAR_DISPLAY_KEY, getSidebarDisplayPrefs, isSidebarItemVisible */
 'use strict';
 
 // A limit whose reset time has passed needs fresh data from the server to clear. The server does
@@ -115,9 +110,9 @@ class UsageSection {
 			if (limit.key === 'session' && isPeakHours()) cap = cap / CONFIG.PEAK_SESSION_MULTIPLIER;
 			if (cap) {
 				const used = Math.round((limit.percentage / 100) * cap);
-				progressBar.tooltip.textContent = localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: limit.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: limit.percentage.toFixed(0) }));
 			} else {
-				progressBar.tooltip.textContent = localize('usage.tooltip_pct_used', { pct: limit.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_pct_used', { pct: limit.percentage.toFixed(0) }));
 			}
 
 			const color = limit.percentage >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
@@ -148,7 +143,7 @@ class UsageSection {
 
 			const usedDollars = (used / 100).toFixed(2);
 			const totalDollars = (effectiveTotal / 100).toFixed(2);
-			progressBar.tooltip.textContent = localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars });
+			progressBar.tooltip.updateText(localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars }));
 
 			const color = pct >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
 			percentage.textContent = `${pct.toFixed(0)}%`;
@@ -174,7 +169,7 @@ class UsageSection {
 		this.renderNotice(usageData);
 	}
 
-	// With nothing to draw the section is just a header sitting on top of the footers, which reads
+	// With nothing to draw the section is just a header sitting on top of the notes box, which reads
 	// as the extension being broken rather than as claude.ai reporting nothing. Say which it is.
 	//
 	// Keyed off hasNoReportedUsage() rather than "no rows were drawn": switching every bar off in
@@ -275,10 +270,11 @@ class UsageUI {
 			tooltips: null,
 		};
 
+		// Notes box state (see createNotesElements)
+		this.notes = { textarea: null, status: null, orgId: null, ready: false, loading: false, dirty: false, saving: false, retries: 0, retryAt: 0, lastLoadAt: 0, saveTimer: null, statusTimer: null };
+
 		// Sub-component
 		this.usageSection = null;
-		this.notesTextarea = null;
-		this.notesSaveTimer = null;
 
 		this.uiReady = false;
 		this.pendingUpdate = null;
@@ -340,15 +336,11 @@ class UsageUI {
 		this.elements.sidebar = await this.createSidebarElements();
 		this.elements.chat = this.createChatElements();
 		this.elements.tooltips = this.createTooltips();
-		this.attachTooltips();
 		this.setCollapsed(this.state.collapsed, false);
 		this.applySidebarDisplay();
 
 		this.uiReady = true;
 		await Log('UsageUI: Ready');
-
-		// Load notes for current account
-		this.loadNotes();
 
 		// Process pending update (only most recent matters)
 		if (this.pendingUpdate) {
@@ -376,26 +368,8 @@ class UsageUI {
 		sectionsContainer.appendChild(this.usageSection.elements.container);
 		content.appendChild(sectionsContainer);
 
-		// Notes container
-		const notesContainer = document.createElement('div');
-		notesContainer.className = 'ut-container ut-notes-container mt-4';
-		notesContainer.style.marginTop = '1rem';
-
-		const notesLabel = document.createElement('h4');
-		notesLabel.className = 'ut-notes-label text-xs text-text-400 mb-1';
-		notesLabel.textContent = 'Notes';
-
-		this.notesTextarea = document.createElement('textarea');
-		this.notesTextarea.className = 'ut-notes-textarea bg-bg-000 border border-border-400 text-text-000 ut-input text-xs resize-none';
-		this.notesTextarea.style.cssText = 'width: 100%; min-height: 80px; padding: 8px; border-radius: 6px; font-family: inherit;';
-		this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-		this.notesTextarea.disabled = true;
-
-		this.notesTextarea.addEventListener('input', () => this.handleNotesInput());
-
-		notesContainer.appendChild(notesLabel);
-		notesContainer.appendChild(this.notesTextarea);
-		content.appendChild(notesContainer);
+		// Per-account notes, stored on the UsageOS server.
+		content.appendChild(this.createNotesElements());
 
 		container.appendChild(header);
 		container.appendChild(content);
@@ -446,10 +420,7 @@ class UsageUI {
 		`;
 
 		settingsButton.addEventListener('click', () => {
-			const buttonRect = settingsButton.getBoundingClientRect();
-			document.dispatchEvent(new CustomEvent('ut:toggleSettings', {
-				detail: { position: { top: buttonRect.top - 5, left: buttonRect.right + 5 } }
-			}));
+			document.dispatchEvent(new CustomEvent('ut:toggleSettings'));
 		});
 
 		header.appendChild(toggle);
@@ -463,7 +434,7 @@ class UsageUI {
 		const prefs = this.state.sidebarDisplay;
 
 		this.usageSection.hiddenKeys = new Set(
-			Object.keys(prefs).filter(key => key !== 'desktopLink' && !isSidebarItemVisible(prefs, key))
+			Object.keys(prefs).filter(key => !isSidebarItemVisible(prefs, key))
 		);
 
 		if (this.state.usageData) this.renderAll();
@@ -498,60 +469,161 @@ class UsageUI {
 	}
 
 	// ========== NOTES ==========
+	//
+	// A free-text note per account, kept on the UsageOS server (the web dashboard shows and edits the
+	// same text, and so does the Telegram bot's `note` command). The background keeps an unsent edit
+	// locally until the server has it, so typing here is safe while the server is down or the account
+	// has not synced yet.
+
+	createNotesElements() {
+		const wrapper = document.createElement('div');
+		wrapper.className = 'ut-notes';
+
+		const labelRow = document.createElement('div');
+		labelRow.className = 'ut-notes-labelrow';
+
+		const label = document.createElement('span');
+		label.className = 'text-xs text-text-400';
+		label.textContent = 'Notes';
+
+		const status = document.createElement('span');
+		status.className = 'ut-notes-status text-xs text-text-400';
+
+		labelRow.append(label, status);
+
+		const textarea = document.createElement('textarea');
+		textarea.className = 'ut-notes-textarea bg-bg-000 border border-border-400 text-text-000 text-xs resize-none';
+		textarea.rows = 4;
+		textarea.spellcheck = false;
+		textarea.disabled = true;
+		textarea.placeholder = 'Loading notes...';
+		textarea.addEventListener('input', () => this.handleNotesInput());
+		textarea.addEventListener('blur', () => this.saveNotes());
+		// Last chance to hand an unsaved edit to the background before the tab goes away.
+		window.addEventListener('pagehide', () => this.saveNotes());
+
+		wrapper.append(labelRow, textarea);
+		this.notes.textarea = textarea;
+		this.notes.status = status;
+		return wrapper;
+	}
+
+	setNotesStatus(text, { clearAfterMs = 0 } = {}) {
+		const { status } = this.notes;
+		if (!status) return;
+		status.textContent = text;
+		clearTimeout(this.notes.statusTimer);
+		if (clearAfterMs) this.notes.statusTimer = setTimeout(() => { status.textContent = ''; }, clearAfterMs);
+	}
+
+	// Locks the box with an explanation. Used when there is nothing safe to edit: no server set up,
+	// or the stored note could not be read (typing then would overwrite a note we never saw).
+	lockNotes(placeholder, retryInMs) {
+		const { textarea } = this.notes;
+		textarea.disabled = true;
+		textarea.value = '';
+		textarea.placeholder = placeholder;
+		this.notes.ready = false;
+		this.notes.retryAt = Date.now() + retryInMs;
+	}
 
 	async loadNotes() {
-		if (!this.notesTextarea) return;
+		const notes = this.notes;
+		if (!notes.textarea || notes.loading) return;
 
 		const orgId = getActiveOrgId();
-		if (!orgId) {
-			this.notesTextarea.placeholder = 'Notes unavailable — no active account';
-			this.notesTextarea.disabled = true;
-			return;
-		}
+		if (!orgId) return this.lockNotes('Notes need an active account', 3000);
 
+		notes.loading = true;
 		try {
-			const result = await sendBackgroundMessage({ type: 'getAllAccountsFromBackend' });
-			if (!result?.ok || !result?.data?.length) {
-				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-				this.notesTextarea.disabled = true;
+			const result = await sendBackgroundMessage({ type: 'getNote' });
+			if (getActiveOrgId() !== orgId) return; // switched account while loading; the next check reloads
+
+			if (!result?.ok) {
+				if (result?.reason === 'not_configured') {
+					this.lockNotes('Add your UsageOS server in the extension options to use notes', 15000);
+				} else {
+					this.lockNotes('Cannot reach the UsageOS server, retrying...', Math.min(60000, 3000 * 2 ** notes.retries++));
+				}
 				return;
 			}
 
-			const account = result.data.find(a => a.org_id === orgId);
-			if (!account) {
-				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-				this.notesTextarea.disabled = true;
-				return;
-			}
+			notes.retries = 0;
+			notes.ready = true;
+			notes.orgId = orgId;
+			notes.lastLoadAt = Date.now();
+			notes.textarea.disabled = false;
+			notes.textarea.placeholder = 'Add notes for this account...';
+			// Never replace text the user is typing or has not saved yet.
+			if (!notes.dirty && document.activeElement !== notes.textarea) notes.textarea.value = result.content || '';
 
-			this.currentAccountId = account.id;
-			this.notesTextarea.disabled = false;
-			this.notesTextarea.placeholder = 'Add notes for this account...';
-			this.notesTextarea.value = account.note || '';
-
-		} catch (err) {
-			await Log('UsageUI: Failed to load notes:', err);
-			this.notesTextarea.placeholder = 'Failed to load notes';
-			this.notesTextarea.disabled = true;
+			if (result.pending) this.setNotesStatus('Saved on this device, uploading when the server is reachable');
+			else if (result.synced === false) this.setNotesStatus('Syncs to the server after this account\'s first usage sync');
+			else if (!notes.dirty) this.setNotesStatus('');
+		} catch (error) {
+			await Log('UsageUI: Failed to load notes:', error);
+			this.lockNotes('Cannot load notes, retrying...', Math.min(60000, 3000 * 2 ** notes.retries++));
+		} finally {
+			notes.loading = false;
 		}
 	}
 
 	handleNotesInput() {
-		if (this.notesSaveTimer) clearTimeout(this.notesSaveTimer);
-		this.notesSaveTimer = setTimeout(() => this.saveNotes(), 800);
+		const notes = this.notes;
+		notes.dirty = true;
+		this.setNotesStatus('Editing...');
+		clearTimeout(notes.saveTimer);
+		notes.saveTimer = setTimeout(() => this.saveNotes(), 800);
 	}
 
 	async saveNotes() {
-		if (!this.notesTextarea || this.notesTextarea.disabled || !this.currentAccountId) return;
+		const notes = this.notes;
+		clearTimeout(notes.saveTimer);
+		if (!notes.dirty || !notes.ready || notes.saving) return;
 
-		const content = this.notesTextarea.value;
+		const content = notes.textarea.value;
+		notes.saving = true;
 		try {
-			const result = await sendBackgroundMessage({ type: 'putNote', orgId: getActiveOrgId(), content });
-			if (!result?.ok) {
-				await Log('UsageUI: Failed to save note:', result?.reason);
-			}
-		} catch (err) {
-			await Log('UsageUI: Failed to save note:', err);
+			const result = await sendBackgroundMessage({ type: 'putNote', content });
+			// Typing carried on while this was in flight: that edit has its own timer.
+			if (notes.textarea.value === content) notes.dirty = false;
+
+			if (result?.ok) this.setNotesStatus('Saved', { clearAfterMs: 2000 });
+			else if (result?.pending) this.setNotesStatus('Saved on this device, uploading when the server is reachable');
+			else this.setNotesStatus('Could not save: ' + (result?.reason || 'unknown error'));
+		} catch (error) {
+			await Log('UsageUI: Failed to save note:', error);
+			this.setNotesStatus('Could not save the note');
+		} finally {
+			notes.saving = false;
+		}
+		// Edited again while saving: send that too.
+		if (notes.dirty && notes.textarea.value !== content) notes.saveTimer = setTimeout(() => this.saveNotes(), 300);
+	}
+
+	// Runs on the update loop: follows account switches, retries a load that failed, and quietly
+	// refreshes an idle box so edits made elsewhere (web dashboard, Telegram) show up.
+	checkNotes() {
+		const notes = this.notes;
+		if (!notes.textarea) return;
+
+		const orgId = getActiveOrgId();
+		if (orgId !== notes.orgId) {
+			clearTimeout(notes.saveTimer);
+			notes.orgId = orgId;
+			notes.ready = false;
+			notes.dirty = false;
+			notes.retries = 0;
+			notes.retryAt = 0;
+			notes.textarea.value = '';
+			this.setNotesStatus('');
+		}
+
+		const now = Date.now();
+		if (!notes.ready) {
+			if (now >= notes.retryAt) this.loadNotes();
+		} else if (now - notes.lastLoadAt > 60000 && !notes.dirty && document.activeElement !== notes.textarea) {
+			this.loadNotes();
 		}
 	}
 
@@ -565,19 +637,19 @@ class UsageUI {
 		// Left container (usage)
 		const leftContainer = document.createElement('div');
 		leftContainer.id = 'ut-stat-left';
-		leftContainer.className = 'ut-row ut-flex-1';
+		leftContainer.className = 'ut-row ut-statline-left';
 
 		const usageDisplay = document.createElement('div');
 		usageDisplay.className = 'text-text-400 text-xs';
 		usageDisplay.style.whiteSpace = 'nowrap';
-		if (!isMobileView()) usageDisplay.style.marginRight = '8px';
+		if (!isMobileLayout()) usageDisplay.style.marginRight = '8px';
 		usageDisplay.textContent = localize('usage.session_inline');
 
 		leftContainer.appendChild(usageDisplay);
 
 		// Progress bar (desktop only)
 		let progressBar = null;
-		if (!isMobileView()) {
+		if (!isMobileLayout()) {
 			progressBar = new ProgressBar({ width: '100%' });
 			progressBar.track.classList.remove('bg-bg-500');
 			progressBar.track.classList.add('bg-bg-200');
@@ -602,7 +674,7 @@ class UsageUI {
 		// Reset time display
 		const resetDisplay = document.createElement('div');
 		resetDisplay.className = 'text-text-400 text-xs';
-		if (!isMobileView()) resetDisplay.style.marginRight = '8px';
+		if (!isMobileLayout()) resetDisplay.style.marginRight = '8px';
 
 		rightContainer.appendChild(peakIndicator);
 		rightContainer.appendChild(resetDisplay);
@@ -615,37 +687,22 @@ class UsageUI {
 	}
 
 	createTooltips() {
-		const create = (text) => {
-			const tooltip = document.createElement('div');
-			tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip font-normal font-ui shadow-sm dark:shadow-panel-sm';
-			tooltip.textContent = text;
-			tooltip.style.maxWidth = '400px';
-			tooltip.style.textAlign = 'left';
-			tooltip.style.whiteSpace = 'pre-line';
-			getTooltipPortal().appendChild(tooltip);
-			return tooltip;
-		};
-
 		// Convert peak hours (1pm-7pm GMT) to user's local timezone
 		const formatLocal = (utcHour) => {
 			const d = new Date();
 			d.setUTCHours(utcHour, 0, 0, 0);
-			return d.toLocaleTimeString(localeForIntl(), { hour: 'numeric', minute: '2-digit' });
+			return d.toLocaleTimeString(currentLocale(), { hour: 'numeric', minute: '2-digit' });
 		};
 		const peakStart = formatLocal(12);
 		const peakEnd = formatLocal(18);
 
+		const { chat } = this.elements;
+		for (const el of [chat.usageDisplay, chat.resetDisplay, chat.peakIndicator]) el.style.cursor = 'help';
 		return {
-			usage: create(localize('usage.tooltip_usage')),
-			timer: create(localize('usage.tooltip_timer')),
-			peak: create(localize('usage.tooltip_peak', { start: peakStart, end: peakEnd })),
+			usage: createClaudeTooltip(chat.usageDisplay, localize('usage.tooltip_usage')),
+			timer: createClaudeTooltip(chat.resetDisplay, localize('usage.tooltip_timer')),
+			peak: createClaudeTooltip(chat.peakIndicator, localize('usage.tooltip_peak', { start: peakStart, end: peakEnd })),
 		};
-	}
-
-	attachTooltips() {
-		setupTooltip(this.elements.chat.usageDisplay, this.elements.tooltips.usage);
-		setupTooltip(this.elements.chat.resetDisplay, this.elements.tooltips.timer);
-		setupTooltip(this.elements.chat.peakIndicator, this.elements.tooltips.peak);
 	}
 
 	// ========== MOUNT (attach to page) ==========
@@ -675,33 +732,64 @@ class UsageUI {
 		this.usageSection.render(usageData);
 	}
 
+	// The stat line row collapses to nothing once its children are hidden, so the container itself
+	// stays in the DOM and LengthUI.mountStatLine() keeps finding #ut-stat-right.
+	setChatUsageVisible(visible) {
+		const { usageDisplay, progressBar, peakIndicator, resetDisplay } = this.elements.chat;
+		const display = visible ? '' : 'none';
+
+		usageDisplay.style.display = display;
+		if (progressBar) progressBar.container.style.display = display;
+
+		// The countdown is session-specific, so it tracks the session limit rather than the row as a
+		// whole. The credits branch renders with no session at all on a credit-funded model, and
+		// would otherwise print "Reset in: Not set" beside a perfectly good Extra usage bar. Same
+		// condition renderResetTimes() uses, so the two can't disagree about it.
+		const session = this.state.usageData?.limits.session;
+		resetDisplay.style.display = visible && session ? '' : 'none';
+
+		// Owned by the render branches below while visible; forced off here so it can't outlive them.
+		if (!visible) peakIndicator.style.display = 'none';
+	}
+
 	renderChatArea() {
 		const { usageData } = this.state;
 		const { usageDisplay, progressBar, peakIndicator, resetDisplay } = this.elements.chat;
 
 		if (!usageData) return;
 
+		// Read the picker directly rather than this.state.currentModel, which stays null until
+		// checkModelChange() first polls (up to 1s after mount). Reused for the weekly marker below.
+		const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
+		const modelName = modelSelector?.textContent?.trim() || null;
+
+		// Nothing to price this against (the free plan, where /usage reports no limits at all).
+		// Returning here without touching the DOM would leave whatever was last written on screen:
+		// that is how a free account ended up showing a stale "Session: 2%" - set by an SSE partial
+		// a moment earlier - next to "Reset in: Not set". Hide the usage half outright instead.
 		const session = usageData.limits.session;
-		if (!session) return;
+		const hasUsage = !!session || usageData.isSpendingCredits(modelName);
+		this.setChatUsageVisible(hasUsage);
+		if (!hasUsage) return;
 
-		const sessionMaxed = session.percentage >= 100;
-
-		// When session is maxed and extra usage is available, show extra usage instead
-		if (sessionMaxed && usageData.hasExtraUsage()) {
+		// Show extra usage instead of the session bar whenever credits are what's being spent —
+		// either the plan limits are maxed, or the selected model is credit-funded (e.g. Fable
+		// on a tier where it has no plan-scoped weekly limit).
+		if (usageData.isSpendingCredits(modelName)) {
 			const effectiveTotal = usageData.getExtraUsageEffectiveTotal();
 			const used = usageData.extraUsage.usedCredits;
 			const pct = effectiveTotal > 0 ? (used / effectiveTotal) * 100 : 0;
 
 			const color = pct >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
-			usageDisplay.innerHTML = `${localize('usage.extra_inline')} <span style="color: ${color}">${pct.toFixed(0)}%</span>`;
+			usageDisplay.innerHTML = `${localize('usage.extra_inline')} <span class="ut-statline-pct" style="color: ${color}">${pct.toFixed(0)}%</span>`;
 			peakIndicator.style.display = 'none';
 
-			if (!isMobileView() && progressBar) {
+			if (!isMobileLayout() && progressBar) {
 				progressBar.updateProgress(pct, 100);
 
 				const usedDollars = (used / 100).toFixed(2);
 				const totalDollars = (effectiveTotal / 100).toFixed(2);
-				progressBar.tooltip.textContent = localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars });
+				progressBar.tooltip.updateText(localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars }));
 				progressBar.clearMarker();
 			}
 
@@ -713,11 +801,11 @@ class UsageUI {
 
 		// Normal session display
 		const color = session.percentage >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
-		usageDisplay.innerHTML = `${localize('usage.session_inline')} <span style="color: ${color}">${session.percentage.toFixed(0)}%</span>`;
+		usageDisplay.innerHTML = `${localize('usage.session_inline')} <span class="ut-statline-pct" style="color: ${color}">${session.percentage.toFixed(0)}%</span>`;
 		peakIndicator.style.display = isPeakHours() ? '' : 'none';
 
 		// Progress bar (desktop only)
-		if (!isMobileView() && progressBar) {
+		if (!isMobileLayout() && progressBar) {
 			progressBar.updateProgress(session.percentage, 100);
 
 			// Override tooltip with estimated token values
@@ -725,14 +813,12 @@ class UsageUI {
 			if (isPeakHours()) cap = cap / CONFIG.PEAK_SESSION_MULTIPLIER;
 			if (cap) {
 				const used = Math.round((session.percentage / 100) * cap);
-				progressBar.tooltip.textContent = localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: session.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: session.percentage.toFixed(0) }));
 			} else {
-				progressBar.tooltip.textContent = localize('usage.tooltip_pct_used', { pct: session.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_pct_used', { pct: session.percentage.toFixed(0) }));
 			}
 
 			// Add weekly marker (filter by current model)
-			const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
-			const modelName = modelSelector?.textContent?.trim() || null;
 			const weeklyLimit = usageData.getBindingWeeklyLimit(modelName);
 			if (weeklyLimit) {
 				const markerKeys = { weekly: 'usage.marker_all', sonnetWeekly: 'usage.marker_sonnet', opusWeekly: 'usage.marker_opus', fableWeekly: 'usage.marker_fable' };
@@ -756,7 +842,9 @@ class UsageUI {
 		// Sidebar
 		this.usageSection.renderResetTimes(usageData);
 
-		// Chat area
+		// Chat area. Skipped with no session limit: this runs every second and would otherwise keep
+		// writing "Reset in: Not set" into the display renderChatArea() hid.
+		if (!usageData.limits.session) return;
 		const resetInfo = usageData.getSessionResetInfo();
 		this.elements.chat.resetDisplay.innerHTML = getResetTimeHTML(resetInfo);
 	}
@@ -864,6 +952,7 @@ class UsageUI {
 				this.checkExpiredLimits();
 				this.checkModelChange();
 				this.checkPeakHoursChange();
+				this.checkNotes();
 				this.mountSidebar();
 				this.mountChatArea();
 			}
