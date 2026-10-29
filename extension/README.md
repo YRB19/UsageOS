@@ -1,48 +1,23 @@
-# Claude Usage Tracker Extension
+# UsageOS Tracker (browser extension)
 
-Track your Claude.ai token usage across conversations with this browser extension.
+The browser half of UsageOS. It reads your claude.ai usage for whichever account you are signed in to and sends it to your self-hosted UsageOS backend. Based on [lugia19/Claude-Usage-Extension](https://github.com/lugia19/Claude-Usage-Extension) 6.1.4 (GPL-3.0).
 
-Also check out my other extension, [[Claude QoL](https://github.com/your-username/Claude-QoL)] (includes summarizing, TTS, STT and way more).
+## Install (Chrome / Brave / Edge)
+1. `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick this folder.
+2. Extension icon, **Server**: enter the server URL and the `ATLAS_API_KEY`, press **Save** (Chrome asks to allow access to your server; accept), then **Test Connection**.
+3. Open claude.ai in each account and send a message. It appears on your dashboard.
 
-## Overview
+After changing code, press the reload icon on the extension card.
 
-This extension helps you monitor how much of your Claude usage quota remains. It calculates token consumption from various sources including uploaded files, project knowledge, chat history, and AI responses.
+## What syncs, and when
+Every time the tracker reads usage (after a message, every 3 minutes while a claude.ai tab is open, when you open the popup) it sends a snapshot. Unchanged snapshots are skipped, except a keep-alive every 10 minutes. If the server is down, snapshots are queued and retried automatically. The Options page shows the sync status.
 
-## Installation
+## Sidebar notes
+The **Notes** box in the claude.ai sidebar is stored per account on your server (same text as the web dashboard and the Telegram `note` command). Edits made while the server is unreachable are kept on the device and uploaded later.
 
-### Chrome
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/knemcdpkggnbhpoaaagmjiigenifejfo.svg)](https://chrome.google.com/webstore/detail/claude-usage-tracker/knemcdpkggnbhpoaaagmjiigenifejfo)
+## Differences from upstream
+- Added: server sync (`bg-components/atlasSync.js`), Options page, local dashboard, Notes.
+- Removed: Ko-fi/donation, Desktop and QoL promotions, rate/update cards, bug-report link.
 
-### Firefox
-[![Mozilla Add-on](https://img.shields.io/amo/v/claude-usage-tracker.svg)](https://addons.mozilla.org/firefox/addon/claude-usage-tracker)
-
-### Desktop Client
-
-[MacOS/Windows installer](https://github.com/your-username/Claude-WebExtension-Launcher/releases/latest)
-
-## Features
-
-The extension tracks token usage from:
-
-- **Files** - Documents uploaded to chats or synced via Google Drive, Github, etc
-- **Projects** - Knowledge files and custom instructions
-- **Personal preferences** - Your configured settings
-- **Message history** - Full conversation context
-- **System prompts** - Enabled tools (analysis, artifacts) on a per-chat basis
-- **MOST MCPs/Integrations** - There are some limitations in cases where a "Knowledge" object is returned that I can't access, such as with web search
-
-Limitations:
-- **Web search results** - The full results are not exposed in the conversation history, so I can't track them properly
-- **Research** - Most of it happens on the backend, so I can't track it
- 
-Token calculation is handled either through Anthropic's API (if you provide your key) or via [gpt-tokenizer](https://github.com/niieani/gpt-tokenizer).
-
-## Privacy
-
-The extension fetches your organization ID from claude.ai to synchronize usage data across devices using Firebase. For full details, see the [privacy policy](PRIVACY.md).
-
-## UI
-
-Most elements in the chat UI (Namely the length, cost, estimate, caching status) have a tooltip explaining them further.
-
-![Claude Usage Tracker UI](https://github.com/your-username/Claude-Usage-Extension/blob/main/ui_screenshot.png?raw=true)
+## Build files
+`content-components/ui_dataclasses.js` is generated: `node scripts/build-dataclasses.js`. `manifest.json` must be a copy of `manifest_chrome.json`.

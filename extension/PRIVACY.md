@@ -1,24 +1,20 @@
-Privacy Policy for Claude Usage Tracker
+Privacy Policy for UsageOS Tracker
 
-Last Updated: 2025/07/17
+This extension is a fork of Claude Usage Tracker by lugia19 (GPL-3.0). It is self-hosted: it has no developer-operated server.
 
-Data Collection and Storage
-- This extension tracks usage statistics for claude.ai
-- We store only the following data:
-  - Amount of tokens used and number of messages sent during the last 5 hour period, and the associated reset time
-  - Your organization ID (for cross-device synchronization)
+What the extension reads
+- Usage figures from claude.ai for the account you are signed in to: percentages and reset times for the session and weekly limits, and your subscription tier.
+- Your account email and organization ID, used to tell your accounts apart.
+- Message text is read locally to estimate usage and is never sent to your UsageOS server.
 
-Data Usage
-- The stored data is used solely for tracking your usage across different devices.
-- We use Firebase for data synchronization
+Where data goes
+- Only to the UsageOS server URL you enter in the extension options (your own server), authenticated with your API key.
+- Sent per account: email, organization ID, subscription tier, limit percentages, reset times, timestamp, and the note you type in the sidebar.
+- Optionally, an Anthropic API key you enter in the settings is used to count tokens through api.anthropic.com.
+- Nothing is sent to the original author or any other third party.
 
-Data Sharing
-- We do not share, sell, or distribute your data to any third parties
-- Data is only used within the extension for functionality purposes
+Stored in your browser
+- Server URL and API key, a queue of snapshots waiting to be sent, unsent notes, and caches.
 
-Data Security
-- All data is stored securely using Firebase
-- Only usage data is stored, no personal information
-
-User Rights
-- You can contact your-email@example.com for any privacy-related questions
+Removing data
+- Uninstalling the extension removes everything stored in the browser. Data on your server is deleted from your own database.
