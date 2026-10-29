@@ -1,128 +1,26 @@
 import './lib/browser-polyfill.min.js';
-import { atlasSync, AtlasSync } from './bg-components/atlasSync.js';
-
-messageRegistry.register('atlasSaveSettings', async (message) => {
-	await AtlasSync.saveSettings(message.url, message.apiKey);
-	await atlasSync.init(true);
-	return true;
-});
-
-messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
-
-messageRegistry.register('getAccountHistory', async (message) => {
-	const { orgId } = message;
-	if (!orgId) return { ok: false, reason: 'missing_orgId' };
-	return atlasSync.getAccountHistory(orgId);
-});
-
-messageRegistry.register('getAllAccountsFromBackend', async () => {
-	return atlasSync.getAllAccountsFromBackend();
-});
-
-messageRegistry.register('putNote', async (message) => {
-	const { orgId, content } = message;
-	if (!orgId) return { ok: false, reason: 'missing_orgId' };
-	return atlasSync.putNote(orgId, content);
-});
-
-// Per-account notes & nicknames
-async function getAccountNote(message) {
-	const { orgId } = message;
-	if (!orgId) return '';
-	try {
-		const result = await browser.storage.sync.get(`accountNote_${orgId}`);
-		return result[`accountNote_${orgId}`] || '';
-	} catch (error) {
-		return await getStorageValue(`accountNote_${orgId}`, '');
-	}
-}
-messageRegistry.register(getAccountNote);
-
-async function setAccountNote(message) {
-	const { orgId, note } = message;
-	if (!orgId) return false;
-	try {
-		await browser.storage.sync.set({ [`accountNote_${orgId}`]: note });
-	} catch (error) {
-		await setStorageValue(`accountNote_${orgId}`, note);
-	}
-	return true;
-}
-messageRegistry.register(setAccountNote);
-
-async function getAccountNickname(message) {
-	const { orgId } = message;
-	if (!orgId) return '';
-	try {
-		const result = await browser.storage.sync.get(`accountNickname_${orgId}`);
-		return result[`accountNickname_${orgId}`] || '';
-	} catch (error) {
-		return await getStorageValue(`accountNickname_${orgId}`, '');
-	}
-}
-messageRegistry.register(getAccountNickname);
-
-async function setAccountNickname(message) {
-	const { orgId, nickname } = message;
-	if (!orgId) return false;
-	try {
-		await browser.storage.sync.set({ [`accountNickname_${orgId}`]: nickname });
-	} catch (error) {
-		await setStorageValue(`accountNickname_${orgId}`, nickname);
-	}
-	return true;
-}
-messageRegistry.register(setAccountNickname);
-
 import './lib/o200k_base.js';
-import { CONFIG, isElectron, RawLog, FORCE_DEBUG, StoredMap, getStorageValue, setStorageValue, removeStorageValue, getOrgStorageKey, sendTabMessage, messageRegistry } from './bg-components/utils.js';
+import { CONFIG, isElectron, RawLog, StoredMap, getStorageValue, setStorageValue, removeStorageValue, sendTabMessage, messageRegistry } from './bg-components/utils.js';
 import { tokenStorageManager, tokenCounter } from './bg-components/tokenManagement.js';
 import { getStrategy, initContainerStrategy, setBrave } from './bg-components/container-strategy.js';
-import { UsageData, modelFamilyFromVersion, defaultModelForTier, defaultModelVersionForTier } from './shared/dataclasses.js';
-import { translate, normalizeLocale } from './shared/localization.js';
+import { modelFamilyFromVersion, defaultModelForTier, defaultModelVersionForTier } from './shared/dataclasses.js';
+// UI strings: the common and tracker tables, then i18n-core.js, which publishes translate() on
+// globalThis. The popup and this worker can't see claude.ai's localStorage, so they translate with
+// the lastLang the content script stores.
+import './common/i18n/all.js';
+import './i18n/all.js';
+import './common/i18n/i18n-core.js';
 import { scheduleAlarm, getAlarm, createNotification } from './bg-components/electron-compat.js';
-import { invalidateAccountSettings, invalidateProfileTokens, storeSseUsage } from './bg-components/claude-api.js';
-
-const INTERCEPT_PATTERNS = {
-	onBeforeRequest: {
-		urls: [
-			"*://claude.ai/api/organizations/*/completion",
-			"*://claude.ai/api/organizations/*/retry_completion",
-			"*://claude.ai/api/settings/billing*",
-			"*://claude.ai/api/account_profile",
-			"*://claude.ai/api/account/settings*"
-		],
-		regexes: [
-			"^https?://claude\\.ai/api/organizations/[^/]*/chat_conversations/[^/]*/completion$",
-			"^https?://claude\\.ai/api/organizations/[^/]*/chat_conversations/[^/]*/retry_completion$",
-			"^https?://claude\\.ai/api/settings/billing",
-			"^https?://claude\\.ai/api/account_profile$",
-			"^https?://claude\\.ai/api/account/settings"
-		]
-	},
-	onCompleted: {
-		urls: [
-			"*://claude.ai/api/organizations/*/chat_conversations/*",
-			"*://claude.ai/v1/sessions/*/events",
-			"*://claude.ai/api/account_profile"
-		],
-		regexes: [
-			"^https?://claude\\.ai/api/organizations/[^/]*/chat_conversations/[^/]*$",
-			"^https?://claude\\.ai/v1/sessions/[^/]*/events$",
-			"^https?://claude\\.ai/api/account_profile$"
-		]
-	}
-};
+import { atlasSync, AtlasSync } from './bg-components/atlasSync.js';
+import { invalidateAccountSettings, invalidateProfileTokens, storeSseUsage, effectiveLeaf } from './bg-components/claude-api.js';
 
 //#region Variable declarations
 let processingLock = null;  // Unix timestamp or null
-const pendingLocaleReloads = new Map();  // tabId -> normalized new locale (set in onBeforeRequest, consumed in onCompleted)
 const pendingTasks = [];
 const LOCK_TIMEOUT = 30000;  // 30 seconds - if a task takes longer, something's wrong
 let pendingRequests;
 let scheduledNotifications;
-let electronPollingInterval = null;
-let electronPollInFlight = false;
+let usageRefreshInFlight = false;
 
 let isInitialized = false;
 let functionsPendingUntilInitialization = [];
@@ -139,11 +37,31 @@ function runOnceInitialized(fn, args) {
 //#region Listener setup (I hate MV3 - listeners must be initialized here)
 //Extension-related listeners:
 browser.runtime.onMessage.addListener(async (message, sender) => {
+	// Log batches and Clear are the shared logger's (common/log/logger.js); letting them through
+	// would log "received message" for every batch.
+	if (message?.type?.startsWith?.('CLAUDE_EXT_LOG')) return;
 	return runOnceInitialized(handleMessageFromContent, [message, sender]);
 });
 
 
 
+
+// How the extra usage bar is measured. New installs measure against the monthly spend limit (the
+// figure claude.ai itself shows); installs that predate the choice keep measuring against what can
+// actually be spent, which was the only behaviour they had. The pref is only written when the
+// settings card is saved, so on an update an absent key means "never chose" - pin the legacy value
+// then. A fresh install writes the new default explicitly for the same reason: if it relied on the
+// read-side default instead, the NEXT release's update would find the key absent, take the install
+// for a legacy one and quietly flip it to the old bar.
+const EXTRA_USAGE_AGAINST_LIMIT_DEFAULT = true;
+browser.runtime.onInstalled?.addListener((details) => {
+	if (details.reason !== 'install' && details.reason !== 'update') return;
+	getStorageValue('extraUsageAgainstLimit', null).then((stored) => {
+		if (stored !== null) return;
+		const value = details.reason === 'install' ? EXTRA_USAGE_AGAINST_LIMIT_DEFAULT : false;
+		return setStorageValue('extraUsageAgainstLimit', value);
+	});
+});
 
 if (browser.contextMenus) {
 	browser.runtime.onInstalled.addListener(() => {
@@ -154,8 +72,14 @@ if (browser.contextMenus) {
 		});
 
 		browser.contextMenus.create({
-			id: 'openDonatePage',
-			title: 'Donate',
+			id: 'openDashboard',
+			title: 'Open UsageOS Dashboard',
+			contexts: ['action']
+		});
+
+		browser.contextMenus.create({
+			id: 'openServerSettings',
+			title: 'UsageOS Server Settings',
 			contexts: ['action']
 		});
 
@@ -164,31 +88,18 @@ if (browser.contextMenus) {
 	browser.contextMenus.onClicked.addListener((info, tab) => {
 		if (info.menuItemId === 'openDebugPage') {
 			browser.tabs.create({
-				url: browser.runtime.getURL('debug.html')
+				url: browser.runtime.getURL('common/log/viewer.html')
 			});
-		} else if (info.menuItemId === 'openDonatePage') {
-			browser.tabs.create({
-				url: "https://ko-fi.com/lugia19"
-			});
+		} else if (info.menuItemId === 'openDashboard') {
+			browser.tabs.create({ url: browser.runtime.getURL('dashboard.html') });
+		} else if (info.menuItemId === 'openServerSettings') {
+			browser.runtime.openOptionsPage();
 		}
 	});
 }
 
 
 if (!isElectron) {
-	// WebRequest listeners
-	browser.webRequest.onBeforeRequest.addListener(
-		(details) => runOnceInitialized(onBeforeRequestHandler, [details]),
-		{ urls: INTERCEPT_PATTERNS.onBeforeRequest.urls },
-		["requestBody"]
-	);
-
-	browser.webRequest.onCompleted.addListener(
-		(details) => runOnceInitialized(onCompletedHandler, [details]),
-		{ urls: INTERCEPT_PATTERNS.onCompleted.urls },
-		["responseHeaders"]
-	);
-
 	initContainerStrategy();
 }
 
@@ -200,16 +111,15 @@ async function handleAlarm(alarmName) {
 	if (alarmName === 'checkResetNotifications') {
 		// Heartbeat: the only other things that refresh a tab's usage are sending a message and
 		// loading a conversation, so a tab left sitting on an expired limit has no way back on its
-		// own if its refresh request failed. Push fresh data every tick regardless of whether reset
-		// notifications are enabled. Electron already polls on its own interval.
-		if (!isElectron) {
-			try {
-				await updateAllTabsWithUsage();
-			} catch (error) {
-				await Log("warn", "Usage heartbeat failed:", error);
-			}
-		}
+		// own if its refresh request failed, and usage spent elsewhere (Claude Code, another device)
+		// never shows up. Push fresh data every tick regardless of whether reset notifications are
+		// enabled. On Electron too: this alarm is the one timer there that outlives the service
+		// worker (the launcher holds it in Node), a setInterval doesn't.
+		await refreshAllTabsUsage();
 		await checkResetNotifications();
+		// UsageOS: retry whatever could not be sent while the server was unreachable. A service
+		// worker can't keep a timer of its own, so the heartbeat is what drives the retries.
+		await atlasSync.flush().catch(error => Log("warn", "UsageOS flush failed:", error));
 	}
 }
 
@@ -223,7 +133,7 @@ async function checkResetNotifications() {
 	const now = Date.now();
 	let shouldNotify = false;
 
-	for (const [timestampKey, orgId] of entries) {
+	for (const [timestampKey] of entries) {
 		const resetTime = parseInt(timestampKey);
 		if (resetTime > now) continue;
 
@@ -262,8 +172,7 @@ async function checkResetNotifications() {
 
 	if (shouldNotify) {
 		try {
-			const stored = await browser.storage.local.get('lastLang');
-			const loc = normalizeLocale(stored.lastLang || 'en');
+			const { lastLang: loc } = await browser.storage.local.get('lastLang');
 			await createNotification({
 				type: 'basic',
 				iconUrl: browser.runtime.getURL('icon128.png'),
@@ -363,11 +272,12 @@ async function updateAllTabsWithUsage(usageData = null) {
 	}
 }
 
-// A conversation record can lag the message that created it: a freshly created chat comes back
-// from the API with no model at all, so getInfo() falls back to CONFIG.DEFAULT_MODEL_VERSION and
-// mislabels it - reporting Opus for a Sonnet chat, which then reads as a model change and hides
-// the cache indicator. The request body we captured is authoritative, so prefer it while it is
-// fresh. Bounded by time because pending entries now expire rather than being deleted on use.
+// A conversation record can lag the message that created it: a freshly created chat comes back from
+// the API with no model at all. getInfo() no longer papers over that with a tier default - it
+// reports the model as unknown - and isCurrentlyCached refuses to claim a cache hit it cannot
+// verify, so without this the indicator would stay hidden on a brand-new chat. The request body we
+// captured is authoritative, so prefer it while it is fresh. Bounded by time because pending entries
+// now expire rather than being deleted on use.
 const PENDING_MODEL_TRUST_MS = 5 * 60 * 1000;
 
 // pendingRequests is two layers: the outer StoredMap key is the conversation, and each value is a
@@ -380,7 +290,7 @@ const PENDING_MODEL_TRUST_MS = 5 * 60 * 1000;
 // which message they are talking about, instead of "whatever is pending for this conversation".
 //
 // That ambiguity is what made a second message sent moments after the first read the previous
-// message's prompt/tools/model and skip its own accounting. Keeping the conversation as the OUTER
+// message's prompt/model and skip its own accounting. Keeping the conversation as the OUTER
 // key preserves StoredMap's per-key TTL at the granularity that matters for eviction, and keeps the
 // two consumers that legitimately want "the newest request here" on a single get.
 // Marks a bucket key that isn't a real turn uuid — see getPendingRequest.
@@ -413,7 +323,7 @@ async function getPendingRequest(orgId, conversationId, turnUuid) {
 	// Exact miss. Fall back ONLY to entries stored under a synthetic key: those are requests whose
 	// body carried no turn_message_uuids, so they can never match the real uuid the callers hold and
 	// would otherwise be unreachable — the fallback key would defeat the fallback. A miss against
-	// real keys is left as a miss, because borrowing another turn's tools and model would be worse
+	// real keys is left as a miss, because borrowing another turn's prompt and model would be worse
 	// than reporting none.
 	const synthetic = Object.fromEntries(
 		Object.entries(bucket).filter(([key]) => key.startsWith(SYNTHETIC_TURN_PREFIX))
@@ -430,8 +340,7 @@ function newestPending(bucket) {
 }
 
 // Writes one generation's entry, dropping siblings that have aged out. No size cap: entries are a
-// handful of numbers and short strings now that tool definitions are stored as a count, so a burst
-// of regenerations inside the TTL costs bytes rather than the ~15KB per turn it used to.
+// handful of numbers and short strings, so a burst of regenerations inside the TTL costs bytes.
 async function setPendingRequest(orgId, conversationId, turnUuid, entry) {
 	// Sweep other conversations' expired buckets while we're writing anyway. Nothing else reads
 	// them — a conversation you never revisit is never read, so its bucket would otherwise sit in
@@ -445,20 +354,6 @@ async function setPendingRequest(orgId, conversationId, turnUuid, entry) {
 	const kept = Object.entries(bucket).filter(([, e]) => (e.requestTimestamp || 0) > cutoff);
 
 	await pendingRequests.set(`${orgId}:${conversationId}`, Object.fromEntries(kept), PENDING_REQUEST_TTL);
-}
-
-// Tool definitions are appended to every request, so the next message in this conversation will
-// carry them whether or not we are the ones who just sent one. Reading them back from the last
-// request keeps a conversation priced the same however you arrived at it.
-//
-// Narrower than it looks: conversationCache lives 60 minutes and pendingRequests 10, so whenever an
-// entry is fresh enough to consult here, the cache is fresh too and requestData never reaches its
-// miss path. The one route that does reach it is a BRANCH SWITCH, which deletes conversationCache
-// explicitly — that is what this is keeping alive. Returns null once the entry expires, which is
-// the honest answer: we no longer know what tools were sent.
-async function lastToolTokens(orgId, conversationId) {
-	const pending = newestPending(await getPendingBucket(orgId, conversationId));
-	return pending?.toolTokens || 0;
 }
 
 async function applyPendingModel(conversationData, orgId, conversationId) {
@@ -485,14 +380,6 @@ async function updateTabWithConversationData(tabId, conversationData) {
 
 // Simple handlers with inline functions
 messageRegistry.register('getConfig', () => CONFIG);
-messageRegistry.register('getAccountLocale', async (message, sender) => {
-	try {
-		return await getStrategy().apiForTab(sender.tab, null).getAccountLocale();
-	} catch (error) {
-		await Log("warn", "Failed to fetch account locale:", error);
-		return null;
-	}
-});
 messageRegistry.register('initOrg', (message, sender, orgId) => tokenStorageManager.addOrgId(orgId).then(() => true));
 
 messageRegistry.register('getAPIKey', () => getStorageValue('apiKey'));
@@ -526,11 +413,30 @@ messageRegistry.register('setResetNotifThreshold', (message) => {
 	return setStorageValue('resetNotifThreshold', clamped);
 });
 
-messageRegistry.register('getLanguageOverride', () => getStorageValue('languageOverride', null));
-messageRegistry.register('setLanguageOverride', (message) => setStorageValue('languageOverride', message.value));
+
+messageRegistry.register('getExtraUsageAgainstLimit', () => getStorageValue('extraUsageAgainstLimit', EXTRA_USAGE_AGAINST_LIMIT_DEFAULT));
+messageRegistry.register('setExtraUsageAgainstLimit', (message) => setStorageValue('extraUsageAgainstLimit', message.value === true));
 
 messageRegistry.register('isElectron', () => isElectron);
-messageRegistry.register('getMonkeypatchPatterns', () => isElectron ? INTERCEPT_PATTERNS : false);
+
+//#region UsageOS server sync (options page, popup, dashboard, sidebar notes)
+// Saving new server settings also forgets what was last sent and re-reads usage right away, so a
+// freshly configured server shows its accounts without waiting for the next message or heartbeat.
+messageRegistry.register('atlasSaveSettings', async (message) => {
+	await AtlasSync.saveSettings(message.url, message.apiKey);
+	await atlasSync.resetDedupe();
+	await atlasSync.resume('settings saved');
+	refreshAllTabsUsage();  // not awaited
+	return true;
+});
+// `url` / `apiKey` may be given to test values before they are saved.
+messageRegistry.register('atlasTestConnection', (message) => atlasSync.testConnection(message.url || message.apiKey ? { url: message.url, apiKey: message.apiKey } : null));
+messageRegistry.register('atlasGetStatus', () => atlasSync.getStatus());
+messageRegistry.register('getAllAccountsFromBackend', () => atlasSync.getAllAccountsFromBackend());
+messageRegistry.register('getAccountHistory', (message) => message.orgId ? atlasSync.getAccountHistory(message.orgId) : { ok: false, reason: 'missing_orgId' });
+messageRegistry.register('getNote', (message) => message.orgId ? atlasSync.getNote(message.orgId) : { ok: false, reason: 'missing_orgId' });
+messageRegistry.register('putNote', (message) => message.orgId ? atlasSync.putNote(message.orgId, String(message.content ?? '')) : { ok: false, reason: 'missing_orgId' });
+//#endregion
 
 // The content script reports whether we're on Brave (navigator.brave.isBrave()). On Brave we can't
 // read per-container cookies, so claude.ai fetches are proxied through the originating tab instead.
@@ -539,18 +445,10 @@ messageRegistry.register('reportBrave', async (message) => {
 	return true;
 });
 
-async function openDebugPage() {
-	if (!isElectron) {
-		browser.tabs.create({ url: browser.runtime.getURL('debug.html') });
-		return true;
-	}
-	return 'fallback';
-}
-messageRegistry.register(openDebugPage);
-
 // Complex handlers
 async function requestData(message, sender, orgId) {
 	const { conversationId } = message;
+	if (!orgId) return; // no org cookie: nothing to fetch for
 
 	const api = getStrategy().apiForTab(sender.tab, orgId);
 
@@ -579,11 +477,7 @@ async function requestData(message, sender, orgId) {
 		} else {
 			await Log(`Cache miss for conversation: ${conversationId}`);
 			const conversation = await api.getConversation(conversationId);
-			// Profile tokens are applied inside getInfo now — this used to add them here with
-			// arithmetic that disagreed with processResponse's.
-			const conversationData = await conversation.getInfo(false, {
-				toolTokens: await lastToolTokens(orgId, conversationId)
-			});
+			const conversationData = await conversation.getInfo(false);
 
 			if (conversationData) {
 				// Before caching, so the correction sticks for the cache's lifetime too.
@@ -619,7 +513,8 @@ async function reportStreamCompletion(message, sender, orgId) {
 	// exist for the account, and it must not be lost to a conversation the estimate can't price.
 	//
 	// Ordering note: the authoritative pass fetches usage ~0.2s later (its trigger is claude.ai's
-	// post-message tree GET), so this write lands first and that fetch picks it up. If it ever lost
+	// post-message tree GET, or on the merged experience the StreamTimeline settle, which follows the
+	// stream's message_limit), so this write lands first and that fetch picks it up. If it ever lost
 	// that race the bars would simply wait for the next message, which is what the free-plan hint
 	// tells the user to do anyway.
 	await storeSseUsage(getStrategy().apiForTab(sender.tab, orgId), message.sseLimits);
@@ -628,14 +523,14 @@ async function reportStreamCompletion(message, sender, orgId) {
 	if (!conversationId || message.assistantTokens === null) return false;
 
 	// Indexed by the assistant uuid the stream just reported, so this reads THIS generation's
-	// prompt/tools/model even if the next message went out while the previous pass was still
+	// prompt/model even if the next message went out while the previous pass was still
 	// running. Without the uuid (shouldn't happen - message_start always carries it) fall back to
 	// the newest entry, which is the pre-uuid behaviour.
 	const pending = await getPendingRequest(orgId, conversationId, message.assistantUuid);
 	const cached = await conversationCache.get(conversationId);
-	// No baseline, no estimate. Synthesizing one from BASE_SYSTEM_PROMPT_LENGTH would miss feature
-	// costs (web search alone is 10250) and profile tokens, and read wildly wrong - a brand-new
-	// conversation is better off waiting the second for the real numbers.
+	// No baseline, no estimate. Synthesizing one from the fixed system prompt would miss profile
+	// tokens, files and project knowledge - a brand-new conversation is better off waiting the
+	// second for the real numbers.
 	if (!pending || !cached) {
 		await Log("Stream completion: no baseline for", conversationId, "- skipping estimate");
 		return false;
@@ -650,10 +545,6 @@ async function reportStreamCompletion(message, sender, orgId) {
 	// but be explicit rather than relying on that.
 	const promptTokens = pending.isRetry ? 0 : Math.max(0, pending.promptTokens || 0);
 
-	// Tool definitions are re-sent with every request at full price. Already counted when the POST
-	// went out, so this stays network-free and costs nothing here.
-	const toolTokens = pending.toolTokens || 0;
-
 	// A regeneration replaces the previous reply rather than appending to it, so adding both would
 	// double-count. We don't know the replaced message's size, so hold the length and let the
 	// estimate asterisk say so.
@@ -667,12 +558,7 @@ async function reportStreamCompletion(message, sender, orgId) {
 	// cached prefix straight back out (:715, since 1 - CACHING_MULTIPLIER is 1), so once a reply
 	// lands the only survivor is that reply. Hence assign, never +=. Adding to the previous value
 	// would carry the last turn's reply forward and roughly double the displayed cost each message.
-	//
-	// Tools are included because they genuinely are re-sent, appended to every request rather than
-	// living in the cached prefix. The authoritative pass now prices them the same way, and no
-	// longer charges profile tokens to futureCost, so the two should land on the same number
-	// instead of the estimate/pass/settled disagreement this used to document.
-	provisional.futureCost = Math.round((1 + CONFIG.OUTPUT_TOKEN_MULTIPLIER) * assistantTokens + toolTokens);
+	provisional.futureCost = Math.round((1 + CONFIG.OUTPUT_TOKEN_MULTIPLIER) * assistantTokens);
 	provisional.cost = provisional.futureCost;
 
 	// uncachedCost genuinely IS cumulative - it never subtracts a cached prefix - so it keeps
@@ -686,6 +572,13 @@ async function reportStreamCompletion(message, sender, orgId) {
 	provisional.conversationIsCachedUntil = Date.now() + CONFIG.TOKEN_CACHING_DURATION_MS;
 	provisional.costUsedCache = true;
 	provisional.lastMessageTimestamp = Date.now();
+	// Names the turn this estimate describes, so the authoritative pass that follows recognises it
+	// as the same message rather than a new one - see ConversationData.lastMessageUuid. Straight
+	// from the stream, which reports the uuid the tree will come back with. A synthetic key is a
+	// timestamp wearing a uuid's clothes and would compare unequal to the real one anyway, so it is
+	// dropped rather than passed off as an identity.
+	provisional.lastMessageUuid = message.assistantUuid ||
+		(pending.turnUuid && !pending.turnUuid.startsWith(SYNTHETIC_TURN_PREFIX) ? pending.turnUuid : null);
 	// isCurrentlyCached() compares modelVersion against the picker, so a stale one hides the cache
 	// indicator. pendingRequests took this from the request body, which is authoritative.
 	provisional.model = pending.model || provisional.model;
@@ -701,7 +594,7 @@ async function reportStreamCompletion(message, sender, orgId) {
 
 	await Log("Stream completion: provisional length", provisional.length,
 		"futureCost", provisional.futureCost, "(assistant", assistantTokens,
-		"prompt", promptTokens, "tools", toolTokens, ")");
+		"prompt", promptTokens, ")");
 
 	await sendTabMessage(sender.tab.id, {
 		type: 'updateConversationData',
@@ -712,32 +605,50 @@ async function reportStreamCompletion(message, sender, orgId) {
 	// start it bought (claude.ai refetches the tree ~0.2s after the stream ends) was invisible —
 	// the provisional above already landed at ~50ms with values that converge exactly. What it cost
 	// was a second trigger source for the same message, and with it a stale-tree retry, a dedupe
-	// window, an in-flight/deferral dance, and two bugs. onCompletedHandler's tree GET is the one
-	// trigger, and its completing is proof the tree exists.
+	// window, an in-flight/deferral dance, and two bugs. onCompletedHandler's tree GET is the
+	// trigger, and its completing is proof the tree exists. (Merged-experience accounts make no such
+	// GET and no completion stream; their trigger is onTurnSettled.)
 	return true;
 }
 messageRegistry.register(reportStreamCompletion);
 
-// Serialises the authoritative pass onto the existing task queue, one at a time per conversation.
+// Serialises the authoritative pass onto the existing task queue, dropping a trigger that overlaps
+// one already in flight for the same message.
 //
-// Dropping (rather than queueing) an overlapping trigger is safe here because every trigger is a
-// tree GET, and overlapping tree GETs are always about the same message: claude.ai's own refetch
-// and Claude QoL's TTS interceptor arrive ~0.1s apart, while the next message's GET cannot arrive
-// until a whole generation later. The flag is cleared in a finally, so nothing stays suppressed.
+// Tree-GET triggers don't say which message they're about, so they collapse per conversation, which
+// is safe: overlapping tree GETs are always about the same message (claude.ai's own refetch and
+// Claude QoL's TTS interceptor arrive ~0.1s apart; the next message's GET can't come until a whole
+// generation later). Stream settles do name their turn, and their pass can wait ~2s for the tree to
+// catch up, long enough for a fast next turn to settle; so they collapse per conversation AND turn,
+// and a different turn queues instead of being dropped. The flag is cleared in a finally, so nothing
+// stays suppressed.
 function queueAuthoritativePass(options) {
-	const conversationId = options.conversationId;
-	if (authoritativeInFlight.has(conversationId)) return;
-	authoritativeInFlight.add(conversationId);
+	const key = options.expectedTurn ? `${options.conversationId}:${options.expectedTurn}` : options.conversationId;
+	if (authoritativeInFlight.has(key)) return;
+	authoritativeInFlight.add(key);
 	pendingTasks.push(async () => {
 		try {
 			await runAuthoritativePass(options);
 		} catch (error) {
 			await logError(error);
 		} finally {
-			authoritativeInFlight.delete(conversationId);
+			authoritativeInFlight.delete(key);
 		}
 	});
 	processNextTask();
+}
+
+// Both triggers' common half: queue the pass for the tab the trigger came from. extra carries the
+// stream trigger's expectedTurn.
+function triggerAuthoritativePass(details, orgId, conversationId, extra = {}) {
+	queueAuthoritativePass({
+		orgId,
+		conversationId,
+		api: getStrategy().apiForRequest(details, orgId),
+		tabId: details.tabId,
+		...extra,
+	});
+	tokenStorageManager.addOrgId(orgId);
 }
 
 async function getPopupUsageData() {
@@ -761,25 +672,15 @@ async function getPopupUsageData() {
 }
 messageRegistry.register(getPopupUsageData);
 
-async function interceptedRequest(message, sender) {
-	await Log("Got intercepted request, are we in electron?", isElectron);
-	if (!isElectron) return false;
-	message.details.tabId = sender.tab.id;
-	message.details.cookieStoreId = sender.tab.cookieStoreId;
-	onBeforeRequestHandler(message.details);
+// The page's requests, from injections/request-hook.js via content-components/request_relay.js. The
+// tab (and its container) come from the sender, which is all apiForRequest needs.
+const fromTab = (handler) => (message, sender) => {
+	handler({ ...message.details, tabId: sender.tab.id, cookieStoreId: sender.tab.cookieStoreId });
 	return true;
-}
-messageRegistry.register(interceptedRequest);
-
-async function interceptedResponse(message, sender) {
-	await Log("Got intercepted response, are we in electron?", isElectron);
-	if (!isElectron) return false;
-	message.details.tabId = sender.tab.id;
-	message.details.cookieStoreId = sender.tab.cookieStoreId;
-	onCompletedHandler(message.details);
-	return true;
-}
-messageRegistry.register(interceptedResponse);
+};
+messageRegistry.register('interceptedRequest', fromTab(onBeforeRequestHandler));
+messageRegistry.register('interceptedResponse', fromTab(onCompletedHandler));
+messageRegistry.register('turnSettled', fromTab(onTurnSettled));
 
 async function getTotalTokensTracked() {
 	return await tokenStorageManager.getTotalTokens();
@@ -795,94 +696,84 @@ async function handleMessageFromContent(message, sender) {
 
 
 //#region Network handling
-async function parseRequestBody(requestBody) {
-	if (!requestBody?.raw?.[0]?.bytes) return undefined;
-
-	// Handle differently based on source
-	if (requestBody.fromMonkeypatch) {
-		const body = requestBody.raw[0].bytes;
-		try {
-			return JSON.parse(body);
-		} catch (e) {
-			try {
-				const params = new URLSearchParams(body);
-				const formData = {};
-				for (const [key, value] of params) {
-					formData[key] = value;
-				}
-				return formData;
-			} catch (e) {
-				return undefined;
-			}
-		}
-	} else {
-		// Original webRequest handling
-		try {
-			const text = new TextDecoder().decode(requestBody.raw[0].bytes);
-			return JSON.parse(text);
-		} catch (e) {
-			return undefined;
-		}
-	}
-}
-
-// The authoritative pass. One per sent message, triggered by claude.ai's post-message tree GET.
+// The authoritative pass. One per sent message, triggered by claude.ai's post-message tree GET
+// (onCompletedHandler), or on merged-experience accounts, which make no such GET, by the turn
+// settling on its StreamTimeline (onTurnSettled), which passes `expectedTurn`: the reply the tree
+// should end on (null if not even a pending send names one).
 //
-// `api` is passed in rather than derived because the caller is a webRequest handler and has to
-// build it from `details` via the active container strategy.
-async function runAuthoritativePass({ orgId, conversationId, api, tabId }) {
-	await Log("Running authoritative pass for", conversationId);
+// `api` is passed in rather than derived because the caller is a request handler and has to
+// build it from `details` (the tab the request came from) via the active container strategy.
+//
+// `sessionId`: on a workspace-upgraded chat, the settle also names the chat's Claude Code session,
+// and getInfo reads the real context size from it (once per settled turn: see getContextUsage).
+async function runAuthoritativePass({ orgId, conversationId, api, tabId, expectedTurn, sessionId }) {
+	await Log("Running authoritative pass for", conversationId, expectedTurn !== undefined ? `(stream settle, turn ${expectedTurn})` : '');
 
-	// Fetch current usage limits from endpoint
+	// Fetch current usage limits from endpoint, and send them out before getInfo, which can wait on a
+	// Claude Code session for a few seconds.
 	const usageData = await api.getUsageData();
+	await scheduleResetNotifications(orgId, usageData);
+	await updateAllTabsWithUsage(usageData);
 
 	// Fetch conversation data
 	const conversation = await api.getConversation(conversationId);
 
-	// Which generation this pass is about. The tree GET that triggered us has already completed, so
-	// the tree is guaranteed to contain the new reply and its leaf IS that reply — no staleness
-	// check needed, which is the main reason this is triggered from the tree GET rather than from
-	// the completion stream. getData memoizes per shape, so getInfo below reuses this fetch.
-	const tree = await conversation.getData(true);
-	const turnUuid = tree?.current_leaf_message_uuid || null;
+	// Which generation this pass is about. When the tree GET triggered us, it has already completed,
+	// so the tree is guaranteed to contain the new reply and its leaf IS that reply — no staleness
+	// check needed, which is the main reason legacy accounts trigger from the tree GET rather than
+	// from the completion stream. The merged experience makes no such GET, so there the trigger is
+	// the StreamTimeline settle (onTurnSettled), and getSettledTree makes up for the missing proof.
+	// The tree is memoized per shape, so getInfo below reuses this read.
+	const tree = expectedTurn === undefined ? await conversation.getData(true) : await conversation.getSettledTree(expectedTurn);
+	// Always the tree's own leaf. expectedTurn only steers the freshness wait: if the tree never
+	// caught up (or a fast next turn already moved the leaf on), pricing it as expectedTurn would pair
+	// that turn's pending entry with another generation's data and settle it for good. Keyed on the
+	// leaf, a stale tree finds no pending entry (a display refresh), and a newer leaf is priced as
+	// itself (its own settle then repeats harmlessly).
+	//
+	// Accepted by design: in that last case (turn B settled before turn A's pass read the tree, a
+	// ~1-2s window), A's one-shot side effects (its usage-delta log line and its cost in the lifetime
+	// token counter) are skipped. The displayed numbers stay right, B's pass prices the whole
+	// conversation; recovering A's share would mean pricing a tree truncated at A, for one statistic.
+	//
+	// "Leaf" skips a compaction divider, which lands on top of the turn's reply.
+	const turnUuid = effectiveLeaf(tree);
 
 	// Scoped to this generation rather than "whatever is pending for this conversation", so a
 	// message sent while a previous pass was still running can't have its data read here.
 	const pendingRequest = await getPendingRequest(orgId, conversationId, turnUuid);
 	const isNewMessage = pendingRequest !== undefined;
 	// The entry is no longer deleted after the first pass — deleting it is what made the second run
-	// disagree with the first, dropping the tool definitions and changing the displayed cost. It is
+	// disagree with the first, dropping the request's model and changing the displayed cost. It is
 	// marked instead, so a repeat pass over the same message still prices it identically while the
 	// one-shot side effects (lifetime token counter, usage delta log) fire exactly once.
 	const alreadyCounted = !!pendingRequest?.settled;
 
-	const model = pendingRequest?.model || defaultModelForTier(usageData.subscriptionTier);
-
-	const conversationData = await conversation.getInfo(isNewMessage, {
-		toolTokens: pendingRequest?.toolTokens || 0
-	});
+	const conversationData = await conversation.getInfo(isNewMessage, sessionId);
 
 	if (!conversationData) {
 		await Log("warn", "Could not get conversation data, exiting...");
 		return false;
 	}
 
-	// Profile and tool tokens are applied inside getInfo now, so there is exactly one place that
-	// knows how they are priced. Nothing to patch here.
-	conversationData.model = model;
-	await Log('authoritative pass: modelVersion -',
-		'from API:', conversationData.modelVersion,
-		'| from pendingRequest:', pendingRequest?.modelVersion);
+	// Both model fields are overridden only when the request that triggered this pass actually knows
+	// better. getInfo already derives them from the conversation's own `model`, and the pass also
+	// runs on plain navigation, where there is no pendingRequest at all - assigning the tier default
+	// unconditionally there replaced a correct family (Fable) with a wrong one (Opus), leaving
+	// `model` and `modelVersion` describing different models.
+	await Log('authoritative pass: model -',
+		'from API:', conversationData.model, conversationData.modelVersion,
+		'| from pendingRequest:', pendingRequest?.model, pendingRequest?.modelVersion);
+	if (pendingRequest?.model) {
+		conversationData.model = pendingRequest.model;
+	}
 	if (pendingRequest?.modelVersion) {
 		conversationData.modelVersion = pendingRequest.modelVersion;
 	}
-	await Log('authoritative pass: modelVersion final:', conversationData.modelVersion);
+	await Log('authoritative pass: model final:', conversationData.model, conversationData.modelVersion);
 
-	// If new message: log delta and update total tokens. Once per message, never on a repeat pass.
-	if (isNewMessage && !alreadyCounted && pendingRequest.previousUsage) {
-		const previousUsage = UsageData.fromJSON(pendingRequest.previousUsage);
-		await logUsageDelta(orgId, previousUsage, usageData, conversationData.length, model);
-
+	// If new message: update total tokens. Once per message, never on a repeat pass.
+	if (isNewMessage && !alreadyCounted) {
 		// Add message cost to total tracked
 		await tokenStorageManager.addToTotalTokens(conversationData.cost);
 
@@ -893,26 +784,13 @@ async function runAuthoritativePass({ orgId, conversationId, api, tabId }) {
 	// Marks THIS generation settled and nothing else. The previous version wrote the whole
 	// conversation's entry back from a snapshot taken at the top of the pass, so a message sent
 	// during the pass had its freshly-stored data reverted and pre-marked settled — losing its
-	// prompt/tools/model and skipping its own accounting.
+	// prompt/model and skipping its own accounting.
 	if (isNewMessage && !alreadyCounted && pendingRequest.turnUuid) {
 		await setPendingRequest(orgId, conversationId, pendingRequest.turnUuid,
 			{ ...pendingRequest, settled: true });
 	}
 
-	// Schedule notifications for any maxed limits
-	await scheduleResetNotifications(orgId, usageData);
-
-	// Send updates to UI
-	await updateAllTabsWithUsage(usageData);
 	await updateTabWithConversationData(tabId, conversationData);
-
-	// Sync usage to Atlas backend (non-blocking)
-	try {
-		const email = await api.getAccountEmail();
-		atlasSync.sync(orgId, email, usageData).catch(() => {});
-	} catch (err) {
-		await Log('warn', 'ATLAS sync error:', err);
-	}
 
 	await conversationCache.set(conversationId, conversationData.toJSON(), CONVERSATION_CACHE_TTL);
 
@@ -920,8 +798,6 @@ async function runAuthoritativePass({ orgId, conversationId, api, tabId }) {
 }
 
 async function debugLogMessageCost(usageData, conversationData) {
-	if (!FORCE_DEBUG) return;
-
 	const limitMapping = {
 		session: 'debug_session',
 		weekly: 'debug_weekly',
@@ -971,35 +847,6 @@ async function debugLogMessageCost(usageData, conversationData) {
 	}
 }
 
-async function logUsageDelta(orgId, previousUsage, currentUsage, conversationLength, model) {
-	const deltas = {};
-
-	for (const [key, currentLimit] of Object.entries(currentUsage.limits)) {
-		if (!currentLimit) continue;
-
-		const previousLimit = previousUsage.limits[key];
-		if (!previousLimit) continue;
-
-		const delta = currentLimit.percentage - previousLimit.percentage;
-
-		// Only log if change >= 1%
-		if (delta >= 1) {
-			deltas[key] = delta;
-		}
-	}
-
-	if (Object.keys(deltas).length > 0) {
-		const entry = {
-			timestamp: Date.now(),
-			orgId,
-			conversationLength,
-			model,
-			deltas
-		};
-
-		await Log(`Usage delta: ${JSON.stringify(entry)}`);
-	}
-}
 
 async function scheduleResetNotifications(orgId, usageData) {
 	const threshold = await getStorageValue('resetNotifThreshold', 100);
@@ -1024,36 +871,46 @@ async function scheduleResetNotifications(orgId, usageData) {
 // Listen for message sending
 async function onBeforeRequestHandler(details) {
 	await Log("Intercepted request:", details.url);
-	await Log("Intercepted body:", details.requestBody);
-	if (details.method === "POST" &&
-		(details.url.includes("/completion") || details.url.includes("/retry_completion"))) {
+	// A message send, from /completion or a merged-experience PerformAction: request-hook.js reports
+	// both as kind 'send' with the ids, isRetry, inheritsModel and the /completion body's fields.
+	if (details.kind === "send") {
 		await Log("Request sent - URL:", details.url);
-		const requestBodyJSON = await parseRequestBody(details.requestBody);
-		// Tools are collapsed to a count on purpose. Their full schemas run to ~15KB, which would
-		// bury everything after them under RawLog's 2000-char per-entry cap - and that cap is what
-		// keeps debug_logs inside the storage quota, so trimming here beats raising it.
-		await Log("Request sent - Body:", { ...requestBodyJSON, tools: requestBodyJSON?.tools?.length ?? 0 });
-		// Extract IDs from URL - we can refine these regexes
-		const urlParts = details.url.split('/');
-		const orgId = urlParts[urlParts.indexOf('organizations') + 1];
+		const requestBodyJSON = details.requestBody; // parsed by the hook
+		// Shape only, never the prompt or attachment text: the debug log is persisted and viewable.
+		await Log("Request sent - Body:", {
+			model: requestBodyJSON?.model,
+			parent_message_uuid: requestBodyJSON?.parent_message_uuid,
+			turn_message_uuids: requestBodyJSON?.turn_message_uuids,
+			promptChars: requestBodyJSON?.prompt?.length ?? 0,
+			attachments: requestBodyJSON?.attachments?.length ?? 0,
+			files: requestBodyJSON?.files?.length ?? 0,
+			tools: requestBodyJSON?.tools?.length ?? 0,
+		});
+		const conversationId = details.conversationId;
+		if (!conversationId) {
+			await Log("warn", "Message send without a conversation id, not recorded:", details.url);
+			return;
+		}
+		const orgId = details.orgId || await requestActiveOrgId(details.tabId);
 		await tokenStorageManager.addOrgId(orgId);
-		const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1];
 
-		// Fetch current usage to snapshot before message. Also gives us the subscription
-		// tier, which decides the default model when the request body doesn't name one.
-		let previousUsage = null;
+		// Nothing slow is awaited before the pending entry is stored: on the merged experience a short
+		// or failed turn can settle within a second, and its pass must find the entry. The one lookup
+		// left, the subscription tier, is only for a legacy send that names no model, and is cached.
 		let subscriptionTier = null;
-		try {
-			const api = getStrategy().apiForRequest(details, orgId);
-			const usageData = await api.getUsageData();
-			previousUsage = usageData.toJSON();
-			subscriptionTier = usageData.subscriptionTier;
-		} catch (error) {
-			await Log("warn", "Failed to fetch pre-message usage snapshot:", error);
+		if (!requestBodyJSON?.model && !details.inheritsModel) {
+			try {
+				subscriptionTier = await getStrategy().apiForRequest(details, orgId).getSubscriptionTier();
+			} catch (error) {
+				await Log("warn", "Failed to read the subscription tier for the default model:", error);
+			}
 		}
 
-		const modelVersion = requestBodyJSON?.model || defaultModelVersionForTier(subscriptionTier);
-		const model = modelFamilyFromVersion(modelVersion) || defaultModelForTier(subscriptionTier);
+		// No model in the body: a legacy send means the tier's default; a send that inheritsModel (merged,
+		// which names it only on a conversation's first message) keeps the conversation's own, so record
+		// none rather than a default that would overwrite it.
+		const modelVersion = requestBodyJSON?.model || (details.inheritsModel ? null : defaultModelVersionForTier(subscriptionTier));
+		const model = modelVersion && (modelFamilyFromVersion(modelVersion) || defaultModelForTier(subscriptionTier));
 		await Log("Model from request:", model, modelVersion);
 
 		// The uuid this generation's assistant message will have, declared by the client before the
@@ -1072,29 +929,6 @@ async function onBeforeRequestHandler(details) {
 			turnUuid = `${SYNTHETIC_TURN_PREFIX}${Date.now()}`;
 		}
 		await Log(`Message sent - conversation ${conversationId}, turn ${turnUuid}`);
-
-		// Tool definitions, counted here and NOT stored. The definitions themselves run to ~15KB of
-		// descriptions and JSON schemas, and the only thing anything downstream ever did with them
-		// was total their tokens — so keeping the array meant parking 15KB per turn, per
-		// conversation, in storage.local, which StoredMap only reclaims if that conversation is read
-		// again. Same reasoning as promptTokens directly below: store the number, drop the text.
-		const toolDefs = requestBodyJSON?.tools?.filter(tool =>
-			tool.name && !['artifacts_v0', 'repl_v0'].includes(tool.type)
-		)?.map(tool => ({
-			name: tool.name,
-			description: tool.description || '',
-			schema: JSON.stringify(tool.input_schema || {})
-		})) || [];
-		await Log("Tool definitions:", toolDefs.map(t => t.name));
-
-		let toolTokens = 0;
-		try {
-			for (const tool of toolDefs) {
-				toolTokens += tokenCounter.countTextLocal(`${tool.name} ${tool.description} ${tool.schema}`);
-			}
-		} catch (error) {
-			await Log("warn", "Failed to size tool definitions:", error);
-		}
 
 		// Size of the outgoing message, for the provisional estimate in reportStreamCompletion.
 		// This is the only place the prompt is visible - by the time the stream ends it is gone.
@@ -1123,11 +957,9 @@ async function onBeforeRequestHandler(details) {
 			model: model,
 			modelVersion: modelVersion,
 			requestTimestamp: Date.now(),
-			toolTokens: toolTokens,
-			previousUsage: previousUsage,
 			promptTokens: promptTokens,
 			hasAttachments: hasAttachments,
-			isRetry: details.url.includes("/retry_completion")
+			isRetry: details.isRetry
 		});
 	}
 
@@ -1135,24 +967,6 @@ async function onBeforeRequestHandler(details) {
 		// This same request carries edited conversation preferences, which are priced into every
 		// conversation, so drop the cached token count rather than waiting out its TTL.
 		await invalidateProfileTokens(await requestActiveOrgId(details.tabId));
-
-		// Read the new UI language straight from the request body — the authoritative value the
-		// user just submitted, with no server-propagation lag (a GET right after the PUT can
-		// briefly still return the old locale). Pin it so the post-reload boot trusts it.
-		const body = await parseRequestBody(details.requestBody);
-		const bodyLocale = body?.locale;
-		// If the user has set an explicit language override, the account language is irrelevant to
-		// the displayed UI — don't pin it or reload (applyLocale would override it on boot anyway).
-		const override = await getStorageValue('languageOverride', null);
-		if (bodyLocale && !override) {
-			const newLoc = normalizeLocale(bodyLocale);
-			const stored = await browser.storage.local.get('lastLang');
-			if (normalizeLocale(stored.lastLang || 'en') !== newLoc) {
-				await browser.storage.local.set({ lastLang: newLoc, lastLangPinnedUntil: Date.now() + 30000 });
-				pendingLocaleReloads.set(details.tabId, newLoc);
-				await Log("Account language change detected in PUT body:", newLoc);
-			}
-		}
 	}
 
 	// The user toggled a feature (memory, web search, ...). Drop the cached account settings
@@ -1172,17 +986,24 @@ async function onBeforeRequestHandler(details) {
 
 }
 
-async function onCompletedHandler(details) {
-	// The language-change PUT has completed (locale was captured from its body in
-	// onBeforeRequest). Reload the originating tab so the whole UI re-renders in the new locale.
-	if (details.method === "PUT" && details.url.includes("/account_profile") &&
-		pendingLocaleReloads.has(details.tabId)) {
-		const loc = pendingLocaleReloads.get(details.tabId);
-		pendingLocaleReloads.delete(details.tabId);
-		await Log("Account language changed to", loc, "- reloading tab");
-		await browser.tabs.reload(details.tabId);
+// A merged-experience turn ended (request-hook.js watches the page's StreamTimeline): the merged
+// experience's stand-in for the post-message tree GET below. assistantMessageId is the turn's key in
+// pendingRequests (recorded from its PerformAction send). It can be missing when the turn straddled a
+// stream reconnect; then the newest turn sent here and not yet priced stands in, so the pass still
+// waits for the tree to show it rather than pricing whatever leaf the first read has.
+async function onTurnSettled(details) {
+	const { orgId, conversationId, assistantMessageId, stopReason, sessionId } = details;
+	if (!orgId || !conversationId) return;
+	let expectedTurn = assistantMessageId || null;
+	if (!expectedTurn) {
+		const unsettled = Object.values(await getPendingBucket(orgId, conversationId)).filter(e => !e.settled);
+		expectedTurn = newestPending(Object.fromEntries(unsettled.map(e => [e.turnUuid, e])))?.turnUuid ?? null;
 	}
+	await Log("Turn settled:", conversationId, assistantMessageId ?? `(no id; newest unsettled send: ${expectedTurn})`, stopReason, sessionId ?? '');
+	triggerAuthoritativePass(details, orgId, conversationId, { expectedTurn, sessionId: typeof sessionId === 'string' ? sessionId : null });
+}
 
+async function onCompletedHandler(details) {
 	if (details.method === "GET" &&
 		details.url.includes("/chat_conversations/") &&
 		details.url.includes("tree=True") &&
@@ -1191,8 +1012,9 @@ async function onCompletedHandler(details) {
 		const urlParts = details.url.split('/');
 		const conversationId = urlParts[urlParts.indexOf('chat_conversations') + 1]?.split('?')[0];
 
-		// The only trigger for the authoritative pass. claude.ai refetches the tree ~0.2s after a
-		// completion stream ends, and that GET completing is proof the new reply is in the tree —
+		// The legacy trigger for the authoritative pass (merged-experience accounts never make this
+		// GET; their trigger is onTurnSettled, from the StreamTimeline). claude.ai refetches the tree
+		// ~0.2s after a completion stream ends, and that GET completing is proof the new reply is in the tree —
 		// which is why triggering here needs no staleness check.
 		//
 		// Measured with every extension disabled: claude.ai issues exactly ONE of these per message
@@ -1208,14 +1030,7 @@ async function onCompletedHandler(details) {
 			return;
 		}
 
-		const treeOrgId = urlParts[urlParts.indexOf('organizations') + 1];
-		queueAuthoritativePass({
-			orgId: treeOrgId,
-			conversationId,
-			api: getStrategy().apiForRequest(details, treeOrgId),
-			tabId: details.tabId
-		});
-		tokenStorageManager.addOrgId(treeOrgId);
+		triggerAuthoritativePass(details, urlParts[urlParts.indexOf('organizations') + 1], conversationId);
 	}
 
 	// Branch switch — debounce, then invalidate cache and fetch fresh data
@@ -1237,10 +1052,7 @@ async function onCompletedHandler(details) {
 
 				const api = getStrategy().apiForRequest(details, orgId);
 				const conversation = await api.getConversation(conversationId);
-				// Profile tokens applied inside getInfo — see requestData.
-				const conversationData = await conversation.getInfo(false, {
-					toolTokens: await lastToolTokens(orgId, conversationId)
-				});
+				const conversationData = await conversation.getInfo(false);
 
 				if (conversationData) {
 					await conversationCache.set(conversationId, conversationData.toJSON(), CONVERSATION_CACHE_TTL);
@@ -1251,8 +1063,10 @@ async function onCompletedHandler(details) {
 		}, 5000));
 	}
 
-	// Claude Code session events — refresh usage
-	if (details.url.includes("/v1/sessions/") && details.url.includes("/events")) {
+	// A message sent to a claude.ai/code session (the page's GETs of the event log don't count) —
+	// refresh usage. Only the send is visible: the session runs remotely, so what it spends shows up
+	// on the next refresh (this, a later send, or the heartbeat).
+	if (details.method === "POST" && /\/v1\/code\/sessions\/[^/]+\/events$/.test(details.url.split('?', 1)[0])) {
 		pendingTasks.push(async () => {
 			const orgId = await requestActiveOrgId(details.tabId);
 			if (!orgId) return;
@@ -1298,16 +1112,17 @@ async function processNextTask() {
 }
 //#endregion
 
-async function electronUsagePoll() {
-	if (electronPollInFlight) return;
-	electronPollInFlight = true;
+// Fresh usage for every tab, for the triggers that aren't a request: the heartbeat, and the Electron
+// window regaining focus. One at a time; a trigger arriving while one runs is dropped.
+async function refreshAllTabsUsage() {
+	if (usageRefreshInFlight) return;
+	usageRefreshInFlight = true;
 	try {
-		await Log("Electron usage poll - fetching fresh usage data");
 		await updateAllTabsWithUsage();
 	} catch (error) {
-		await Log("warn", "Electron usage poll failed:", error);
+		await Log("warn", "Usage refresh failed:", error);
 	} finally {
-		electronPollInFlight = false;
+		usageRefreshInFlight = false;
 	}
 }
 
@@ -1326,16 +1141,16 @@ const branchSwitchTimers = new Map(); // conversationId → timeoutId (debounce)
 // message, so a second trigger arriving while one is in flight is a duplicate and gets dropped.
 const authoritativeInFlight = new Set();
 
-// pendingRequests entries used to be deleted by the first pass that consumed them. They now expire
-// instead — long enough that any fallback pass for the same message still sees the tool definitions
-// and the model the request was sent with, short enough that revisiting the conversation later is
-// not mistaken for a fresh send.
+// pendingRequests entries expire rather than being deleted by the pass that consumes them: long
+// enough that a repeat pass for the same message still sees the model it was sent with, short
+// enough that revisiting the conversation later isn't read as a fresh send.
 const PENDING_REQUEST_TTL = 10 * 60 * 1000;
 
 // Set up repeating alarm for reset notification polling (every 3 minutes)
+const HEARTBEAT_ALARM = { periodInMinutes: 3 };
 getAlarm('checkResetNotifications').then(existing => {
 	if (!existing) {
-		scheduleAlarm('checkResetNotifications', { periodInMinutes: 3 });
+		scheduleAlarm('checkResetNotifications', HEARTBEAT_ALARM);
 		Log("Created repeating checkResetNotifications alarm");
 	}
 });
@@ -1347,11 +1162,19 @@ for (const handler of functionsPendingUntilInitialization) {
 functionsPendingUntilInitialization = [];
 Log("Done initializing.")
 
-atlasSync.flushOnStartup().catch(() => {});
+// UsageOS: a worker that just woke up may be holding snapshots from before it was stopped.
+atlasSync.flush().catch(() => { });
 
 if (isElectron) {
-	const ELECTRON_POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
-	electronPollingInterval = setInterval(electronUsagePoll, ELECTRON_POLL_INTERVAL_MS);
-	Log("Electron usage polling started with interval:", ELECTRON_POLL_INTERVAL_MS, "ms");
+	// The launcher dispatches this when the window gains focus: the likeliest moment for usage spent
+	// elsewhere (the desktop app's Code tab runs the CLI, which the page never sees) to be looked at.
+	// It also re-sends the heartbeat alarm. The create sent at app launch can reach the page before the
+	// launcher hooks its console, and is then lost for good: nothing else wakes the worker to send it
+	// again. This event comes from that hook, so it can't be early, and the launcher ignores a repeat.
+	messageRegistry.register('electronTabActivated', () => {
+		scheduleAlarm('checkResetNotifications', HEARTBEAT_ALARM);
+		refreshAllTabsUsage();
+		return true;
+	});
 }
 //#endregion
