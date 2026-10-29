@@ -1,4 +1,3 @@
-/* global UsageData, isPeakHours, localize, setLocaleOverride */
 'use strict';
 let CONFIG;
 const GREEN = '#22c55e';
@@ -6,6 +5,9 @@ const AMBER = '#ff8906';
 const RED = '#f25f4c';
 const MUTED = '#a7a9be';
 const WARNING_THRESHOLD = 0.9;
+
+// The popup can't see claude.ai's localStorage, where the language is resolved, so localize() is
+// pinned (pinLocale) to the language the content script last stored as lastLang.
 
 const LIMIT_LABEL_KEYS = {
 	session: 'usage.label_session',
@@ -150,16 +152,14 @@ function applyStaticLocalization() {
 	const helpEl = document.getElementById('popup-help');
 	if (helpEl) helpEl.textContent = localize('popup.help');
 	const debugEl = document.getElementById('debug');
-	if (debugEl) debugEl.textContent = localize('common.debug_logs');
-	const donateEl = document.getElementById('donate');
-	if (donateEl) donateEl.textContent = localize('popup.donate');
+	if (debugEl) debugEl.textContent = localize('shared.view_debug_logs');
 }
 
 async function loadUsageData() {
 	const container = document.getElementById('usage-container');
 
 	const stored = await browser.storage.local.get('lastLang');
-	setLocaleOverride(stored.lastLang || 'en');
+	pinLocale(stored.lastLang || 'en');
 	applyStaticLocalization();
 
 	try {
@@ -195,17 +195,17 @@ async function loadUsageData() {
 }
 
 document.getElementById('debug').addEventListener('click', () => {
-	chrome.tabs.create({ url: chrome.runtime.getURL('debug.html') });
-	window.close();
-});
-
-document.getElementById('donate').addEventListener('click', () => {
-	chrome.tabs.create({ url: 'https://ko-fi.com/lugia19' });
+	chrome.tabs.create({ url: chrome.runtime.getURL('common/log/viewer.html') });
 	window.close();
 });
 
 document.getElementById('open-dashboard').addEventListener('click', () => {
 	chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+	window.close();
+});
+
+document.getElementById('open-settings').addEventListener('click', () => {
+	browser.runtime.openOptionsPage();
 	window.close();
 });
 

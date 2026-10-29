@@ -256,7 +256,7 @@
 			<div class="field">
 				<label for="server-url">Server URL</label>
 				<input type="text" id="server-url" placeholder="https://your-server-url.com" autocomplete="url">
-				<p class="help-text">Your UsageOS backend URL. Must use HTTPS.</p>
+				<p class="help-text">Your UsageOS backend URL. Use HTTPS. Saving asks Chrome to allow this extension to contact it.</p>
 			</div>
 
 			<div class="field">
@@ -265,10 +265,11 @@
 					<input type="password" id="api-key" placeholder="sk_usageos_..." autocomplete="off">
 					<button type="button" class="password-toggle" id="toggle-key" aria-label="Show/hide API key">&#128065;</button>
 				</div>
-				<p class="help-text">Get your API key from the UsageOS dashboard.</p>
+				<p class="help-text">The <code>ATLAS_API_KEY</code> value from your server's <code>.env</code> file.</p>
 			</div>
 
 			<div class="status" id="status"></div>
+			<p class="help-text" id="sync-status"></p>
 		</div>
 
 		<div class="section">
@@ -280,7 +281,7 @@
 	</div>
 
 	<div class="footer">
-		<p class="footer-text">UsageOS v1.0</p>
+		<p class="footer-text">UsageOS extension (based on Claude Usage Tracker by lugia19, GPL-3.0)</p>
 	</div>
 
 	<script src="lib/browser-polyfill.min.js"></script>

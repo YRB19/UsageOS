@@ -1,3 +1,8 @@
+// Always-on logging (common/log/logger.js publishes createLogger/configureLogger on globalThis).
+import '../common/log/logger.js';
+// The background is the only writer of the debug log; content scripts send it their entries.
+configureLogger({ app: 'tracker', prefix: '[UsageTracker]', role: 'background' });
+
 // Configuration object (moved from constants.json)
 const CONFIG = {
 	"OUTPUT_TOKEN_MULTIPLIER": 4,
@@ -7,22 +12,50 @@ const CONFIG = {
 		"Sonnet",
 		"Haiku"
 	],
+	// Cost weight per API model ID - the model's input price in $/MTok. Priced per model rather
+	// than per family because prices vary within a family (Opus 5.5 is cheaper than Opus 5, Sonnet
+	// 5 than Sonnet 4.6). Looked up by modelWeight() in shared/dataclasses.js.
+	//
+	// A model priced by prompt length takes the tiered form { weight, longWeight, longAbove }: past
+	// longAbove tokens of conversation, the message is priced at longWeight.
 	"MODEL_WEIGHTS": {
+		"claude-fable-5-1": 10,
+		"claude-fable-5": 10,
+		"claude-opus-5-5": 4,
+		"claude-opus-5": 5,
+		"claude-sonnet-5-5": 2,
+		"claude-haiku-5-5": { "weight": 0.1, "longWeight": 0.5, "longAbove": 100000 },
+		"claude-sonnet-5": 2,
+		"claude-opus-4-8": 5,
+		"claude-opus-4-7": 5,
+		"claude-sonnet-4-6": 3,
+		"claude-opus-4-6": 5,
+		"claude-opus-4-5-20251101": 5,
+		"claude-sonnet-4-5-20250929": 3,
+		"claude-haiku-4-5-20251001": 1,
+		"claude-3-opus-20240229": 15,
+	},
+	// Weight for a model ID not in MODEL_WEIGHTS (e.g. one released after this build), by family.
+	// Each errs toward the family's higher price - over-reporting a cost is the safe direction.
+	"FAMILY_MODEL_WEIGHTS": {
 		"Fable": 10,
 		"Opus": 5,
 		"Sonnet": 3,
 		"Haiku": 1
 	},
-	// Weight to use for a model family we don't recognize. Opus-equivalent - erring high
-	// is the safe direction for a cost estimate.
+	// Weight to use when even the family is unknown. Opus-equivalent, erring high for the same reason.
 	"FALLBACK_MODEL_WEIGHT": 5,
 	"MODEL_VERSION_MAP": {
 		// DOM labels (lowercased) → API model IDs.
 		// Matched with startsWith() in insertion order, so a longer label must come above
 		// any shorter label that prefixes it ("opus 5.1" above "opus 5").
+		"fable 5.1": "claude-fable-5-1",
 		"fable 5": "claude-fable-5",
+		"opus 5.5": "claude-opus-5-5",
 		"opus 5": "claude-opus-5",
+		"sonnet 5.5": "claude-sonnet-5-5",
 		"sonnet 5": "claude-sonnet-5",
+		"haiku 5.5": "claude-haiku-5-5",
 		"opus 4.8": "claude-opus-4-8",
 		"opus 4.7": "claude-opus-4-7",
 		"sonnet 4.6": "claude-sonnet-4-6",
@@ -35,24 +68,77 @@ const CONFIG = {
 	// claude.ai's default picker selection depends on the plan: Max lands on Opus,
 	// every other tier on Sonnet.
 	"DEFAULT_MODEL_VERSION_BY_TIER": {
-		"claude_free": "claude-sonnet-5",
-		"claude_pro": "claude-sonnet-5",
-		"claude_team": "claude-sonnet-5",
-		"claude_max_5x": "claude-opus-5",
-		"claude_max_20x": "claude-opus-5"
+		"claude_free": "claude-sonnet-5-5",
+		"claude_pro": "claude-sonnet-5-5",
+		"claude_team": "claude-sonnet-5-5",
+		"claude_max_5x": "claude-opus-5-5",
+		"claude_max_20x": "claude-opus-5-5"
 	},
 	// Used only when the tier isn't known yet (e.g. a content script before the first
 	// updateUsage arrives). Matches the claude_free row, which is where an unresolvable
 	// tier already degrades to.
-	"DEFAULT_MODEL_VERSION": "claude-sonnet-5",
+	"DEFAULT_MODEL_VERSION": "claude-sonnet-5-5",
+	// Tokens priced for a merged-experience compaction summary. Its real size (CompactionDivider
+	// post_tokens) exists only in the new API, which this background can't call (see getData). Observed:
+	// 2629-9916, mean ~5.2K, and post_tokens itself overstated one measured summary by ~1.7x; summaries
+	// barely track the history they replace (1.4-5% of it), so a constant is about as good. Errs high.
+	"COMPACTION_SUMMARY_TOKENS": 6000,
 	"WARNING_THRESHOLD": 0.9,
 	"PEAK_SESSION_MULTIPLIER": 1.5,
 	"WARNING": {
 		"PERCENT_THRESHOLD": 0.9,
-		"LENGTH": 50000,
-		"COST": 250000
+		"LENGTH_FRACTION": 0.75, // of the next message's context window (CONTEXT_WINDOWS): earlier than the usage bars, so there's room to wrap up
+		"LENGTH": 500000, // total context, system prompt included (see SYSTEM_PROMPT_TOKENS); only for a model with no CONTEXT_WINDOWS entry
+		"COST": 1000000
 	},
-	"BASE_SYSTEM_PROMPT_LENGTH": 3200,
+	// Each model's context window, keyed like MODEL_WEIGHTS (API ID without its date suffix), as
+	// { chat, workspace: [window, compactAt] }. `chat` is a plain chat, from the help article's "Chat
+	// with Claude" table (support.claude.com 8606394, read 2026-10-09; 200K is its default for an
+	// unlisted model): it can't be measured. `workspace` is a workspace-upgraded chat, which runs on a
+	// Claude Code session: its get_context_usage maxTokens and autoCompactThreshold after the picker's
+	// set_model, measured 2026-10-09 (they don't match the article's Cowork column for Sonnet 5.5). The
+	// picker sends plain IDs, never a [1m] variant, so the 4.6 models get 200K there. A reading from the
+	// chat's own session beats this table (ConversationData.getContextWindow).
+	"CONTEXT_WINDOWS": {
+		"claude-fable-5-1": { chat: 1000000, workspace: [1000000, 967000] },
+		"claude-fable-5": { chat: 500000, workspace: [1000000, 967000] },
+		"claude-opus-5-5": { chat: 1000000, workspace: [1000000, 967000] },
+		"claude-opus-5": { chat: 1000000, workspace: [1000000, 967000] },
+		"claude-opus-4-8": { chat: 500000, workspace: [1000000, 967000] },
+		"claude-opus-4-7": { chat: 500000, workspace: [1000000, 967000] },
+		"claude-opus-4-6": { chat: 500000, workspace: [200000, 167000] },
+		"claude-opus-4-5": { chat: 200000, workspace: [200000, 167000] },
+		"claude-3-opus": { chat: 200000, workspace: [200000, 182904] },
+		"claude-sonnet-5-5": { chat: 1000000, workspace: [500000, 467000] },
+		"claude-sonnet-5": { chat: 1000000, workspace: [500000, 467000] },
+		"claude-sonnet-4-6": { chat: 500000, workspace: [200000, 167000] },
+		// Out of the picker, so its workspace figure can't be measured: assumed like Opus 4.5 and Haiku
+		// 4.5, the other pre-4.6 models. Still reached by conversations that used it.
+		"claude-sonnet-4-5": { chat: 200000, workspace: [200000, 167000] },
+		"claude-haiku-5-5": { chat: 1000000, workspace: [500000, 467000] },
+		"claude-haiku-4-5": { chat: 200000, workspace: [200000, 167000] },
+	},
+	// The fixed system prompt every conversation carries, in Claude's current (Opus 4.7+) tokenizer,
+	// measured on the merged-experience prompt 2026-10-08 (claude-ext-common scripts/bard/README.md,
+	// "Fixed overhead, current variant"). Static and in the cached prefix; tool definitions live here
+	// too, not on each request. Assumes the variant most chats get: some chats switch to a Claude Code
+	// variant after their environment is set up, ~7K smaller. Legacy accounts get the same figures.
+	"SYSTEM_PROMPT_TOKENS": {
+		"behavior": 28600,	// claude_behavior, agentic_behavior, search + copyright, image search, citations, end_conversation, thinking
+		"tools": 58500,		// the 60 built-in tool schemas
+		"skills": 5500,		// available_skills; per-account, measured with 22 skills
+		"trailing": 2300	// trailing system text plus the first turn's reminders
+	},
+	// Added when the account has conversation preferences: the section explaining how to apply them
+	// (the preference text itself is counted separately).
+	"PREFERENCES_SECTION_TOKENS": 2000,
+	// Prompt sections and tool schemas that only exist with a setting on, keyed by the flag
+	// getAccountSettings reports (same tokenizer and source as SYSTEM_PROMPT_TOKENS).
+	"FEATURE_PROMPT_TOKENS": {
+		"memory": 24800,				// memory_filesystem and its guidance + 6 memory tools (memory files not included)
+		"enabled_saffron_search": 3700,	// past_chats_tools + conversation_search, read_conversation, recent_chats
+		"inline_visuals": 4200			// visualizer sections + the visualize read_me / show_widget tools
+	},
 	"CACHING_MULTIPLIER": 0, // Seems to be free.
 	// o200k undercounts against Claude's real tokenizer; this closes the gap. Lives in CONFIG
 	// rather than on TokenCounter so the content script gets the same figure via getConfig —
@@ -134,120 +220,16 @@ function fillEstimatedCaps(caps) {
 CONFIG.ESTIMATED_CAPS = fillEstimatedCaps(CONFIG.ESTIMATED_CAPS);
 
 const isElectron = chrome.action === undefined || navigator.userAgent.includes("Electron");
-const FORCE_DEBUG = true; // Set to true to force debug mode
-
-setStorageValue('force_debug', FORCE_DEBUG);
+// Retired keys: the old debug toggles, the Google Drive / GitHub sync-source token cache, and the
+// file token cache that also held metadata estimates (now fileTokensV2).
+browser.storage.local.remove(['force_debug', 'debug_mode_until', 'syncTokens', 'fileTokens']).catch(() => { });
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Debug logs are buffered in memory and flushed to storage on a short debounce, so the hot path never
-// blocks on (or repeatedly rewrites) storage — previously every Log() did 2 awaited storage reads + a
-// full-array write. Trade-off: up to ~1s of logs can be lost if the background context is torn down
-// before a flush — acceptable for debug logging.
-let pendingLogEntries = [];
-let logFlushScheduled = false;
-
-function scheduleLogFlush() {
-	if (logFlushScheduled) return;
-	logFlushScheduled = true;
-	setTimeout(flushLogs, 1000);
-}
-
-async function flushLogs() {
-	logFlushScheduled = false;
-	if (pendingLogEntries.length === 0) return;
-	const batch = pendingLogEntries;
-	pendingLogEntries = [];
-	// Read fresh and append so we don't clobber logs written by other contexts (e.g. content scripts).
-	try {
-		const logs = await getStorageValue('debug_logs', []);
-		logs.push(...batch);
-		while (logs.length > 1000) logs.shift();
-		await setStorageValue('debug_logs', logs);
-	} catch (e) {
-		// Storage full — keep only the most recent so it self-heals; never throw.
-		try {
-			await setStorageValue('debug_logs', batch.slice(-100));
-		} catch (e2) {
-			// Give up — better to lose logs than to break anything.
-		}
-	}
-}
-
-async function RawLog(sender, ...args) {
-	let level = "debug";
-
-	if (typeof args[0] === 'string' && ["debug", "warn", "error"].includes(args[0])) {
-		level = args.shift();
-	}
-
-	// Gate: when FORCE_DEBUG is off, only log within the debug window. When on, skip the storage read.
-	if (!FORCE_DEBUG) {
-		const debugUntil = await getStorageValue('debug_mode_until');
-		if (!debugUntil || debugUntil <= Date.now()) return;
-	}
-
-	if (level === "warn") {
-		console.warn("[UsageTracker]", ...args);
-	} else if (level === "error") {
-		console.error("[UsageTracker]", ...args);
-	} else {
-		console.log("[UsageTracker]", ...args);
-	}
-
-	const timestamp = new Date().toLocaleString('default', {
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		hour12: false,
-		fractionalSecondDigits: 3
-	});
-
-	let message = args.map(arg => {
-		if (arg instanceof Error) {
-			return arg.stack || `${arg.name}: ${arg.message}`;
-		}
-		if (typeof arg === 'object') {
-			if (arg === null) return 'null';
-			try {
-				// The replacer used to be Object.getOwnPropertyNames(arg), which JSON.stringify treats
-				// as a property ALLOWLIST APPLIED AT EVERY NESTING LEVEL - not a depth hint. Nested
-				// objects silently kept only keys that happened to also exist at the top level, so
-				// every logged payload came out hollowed: the completion body logged its tools as 30
-				// empty {}, and turn_message_uuids read as {} when it was populated. It was presumably
-				// there so Errors would serialise, but the `arg instanceof Error` branch above already
-				// covers that.
-				//
-				// The seen-set is what the allowlist accidentally provided: a guard against circular
-				// graphs. Without it a self-referencing object throws and lands in the catch below as
-				// a useless "[object Object]".
-				const seen = new WeakSet();
-				return JSON.stringify(arg, (key, value) => {
-					if (typeof value === 'object' && value !== null) {
-						if (seen.has(value)) return '[Circular]';
-						seen.add(value);
-					}
-					return value;
-				}, 2);
-			} catch (e) {
-				return String(arg);
-			}
-		}
-		return String(arg);
-	}).join(' ');
-
-	// Cap per-entry size so a large payload (e.g. a base64 proxyFetch body) can't blow the storage
-	// quota. With the 1000-entry cap this bounds debug_logs well under the 10MB local limit.
-	const MAX_LOG_MESSAGE = 2000;
-	if (message.length > MAX_LOG_MESSAGE) {
-		message = message.slice(0, MAX_LOG_MESSAGE) + `…[truncated ${message.length - MAX_LOG_MESSAGE} chars]`;
-	}
-
-	// Append to the in-memory buffer (bounded) and let the debounced flush persist it — no awaited
-	// storage I/O in the caller's path.
-	pendingLogEntries.push({ timestamp, sender, level, message });
-	if (pendingLogEntries.length > 1000) pendingLogEntries.shift();
-	scheduleLogFlush();
+// sender is the module name ("background", "claude-api", ...). Kept as a function for the existing
+// `Log = (...args) => RawLog('<module>', ...args)` wrappers.
+function RawLog(sender, ...args) {
+	createLogger(sender)(...args);
 }
 
 async function Log(...args) {
@@ -440,7 +422,6 @@ export {
 	isElectron,
 	sleep,
 	RawLog,
-	FORCE_DEBUG,
 	StoredMap,
 	getOrgStorageKey,
 	getStorageValue,
