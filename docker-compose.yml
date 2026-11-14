@@ -5,15 +5,15 @@ services:
     image: postgres:16-alpine
     container_name: usageos-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_USER: ${POSTGRES_USER:-server}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+      POSTGRES_DB: ${POSTGRES_DB:-server}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"   # local only; handy for development
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlas} -d ${POSTGRES_DB:-atlas}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-server} -d ${POSTGRES_DB:-server}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -25,9 +25,9 @@ services:
       dockerfile: Dockerfile
     container_name: usageos-backend
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-atlas}
-      ATLAS_API_KEY: ${ATLAS_API_KEY:?Set ATLAS_API_KEY in .env}
-      # Password typed once per device on the dashboard login screen. Falls back to ATLAS_API_KEY when empty.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-server}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-server}
+      SERVER_API_KEY: ${SERVER_API_KEY:?Set SERVER_API_KEY in .env}
+      # Password typed once per device on the dashboard login screen. Falls back to SERVER_API_KEY when empty.
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       # Required for the Telegram webhook to accept messages (see README, Telegram section).

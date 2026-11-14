@@ -79,8 +79,8 @@ authors = ["Your Name <your-email@example.com>"]
 
 **Evidence**:
 ```
-POSTGRES_PASSWORD=atlas-local-pass-1794569349
-ATLAS_API_KEY=5bb17071ab20789f6368aff5b8b7fec0c2dd4cf6ef8d5a747241664dd1dfd4dd
+POSTGRES_PASSWORD=server-local-pass-1794569349
+SERVER_API_KEY=5bb17071ab20789f6368aff5b8b7fec0c2dd4cf6ef8d5a747241664dd1dfd4dd
 TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 DASHBOARD_PASSWORD=local-dashboard-pass
 ```
@@ -88,7 +88,7 @@ DASHBOARD_PASSWORD=local-dashboard-pass
 **Risk**: 
 - Real API key, database password, and dashboard password committed
 - Even though `.gitignore` lists `.env`, the file exists in the working tree and may have been committed historically
-- `ATLAS_API_KEY` is a valid 64-char hex string (high entropy) — can be used to impersonate the extension
+- `SERVER_API_KEY` is a valid 64-char hex string (high entropy) — can be used to impersonate the extension
 
 **Fix**: 
 1. **Immediately rotate all secrets** in `.env`
@@ -326,7 +326,7 @@ And sanitize note content (currently raw text rendered in React — safe if not 
 **Evidence**:
 ```python
 def _secret() -> bytes:
-    material = f"usageos-session|{dashboard_password()}|{settings.atlas_api_key}"
+    material = f"usageos-session|{dashboard_password()}|{settings.server_api_key}"
     return hashlib.sha256(material.encode()).digest()
 ```
 
@@ -502,7 +502,7 @@ sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now(
 ---
 
 #### 24. [LOW] Debug Endpoint `/api/v1/sync/connection-test` Exists
-**Location**: `backend/app/routers/sync.py` (referenced in `atlasSync.js:346`)
+**Location**: `backend/app/routers/sync.py` (referenced in `serverSync.js:346`)
 
 **Risk**: Unauthenticated endpoint that confirms server reachability — minor information disclosure.
 
@@ -549,7 +549,7 @@ passlib = {extras = ["bcrypt"], version = "^1.7.4"}
 
 | File | Secrets Found | Action Required |
 |------|---------------|-----------------|
-| `.env` | `POSTGRES_PASSWORD`, `ATLAS_API_KEY`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN` | `git filter-repo --path .env --invert-paths` + **rotate all secrets** |
+| `.env` | `POSTGRES_PASSWORD`, `SERVER_API_KEY`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN` | `git filter-repo --path .env --invert-paths` + **rotate all secrets** |
 | `backend/pyproject.toml` | Author email (template) | Replace or remove |
 
 **Commands to clean history:**
@@ -572,7 +572,7 @@ git push --force --tags
 ## Pre-Publish Checklist (Prioritized)
 
 ### 🚨 Blockers (Do First)
-- [ ] **Rotate all secrets** in `.env` (new `ATLAS_API_KEY`, `POSTGRES_PASSWORD`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN`)
+- [ ] **Rotate all secrets** in `.env` (new `SERVER_API_KEY`, `POSTGRES_PASSWORD`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN`)
 - [ ] **Purge `.env` from git history** using `git filter-repo`
 - [ ] **Remove hardcoded `usageos.example.com`** from all 3 manifest files (`host_permissions` + extension ID)
 - [ ] **Replace extension ID** with generic (e.g., `usageos-tracker@usageos.local`)
@@ -611,7 +611,7 @@ git push --force --tags
 1. **Self-hosted threat model**: The user controls the server. The extension only talks to the user's server. This is correctly implemented — no hardcoded telemetry, no developer-operated backend.
 
 2. **Trust boundaries**:
-   - Extension ↔ Backend: Authenticated via `ATLAS_API_KEY` (Bearer token)
+   - Extension ↔ Backend: Authenticated via `SERVER_API_KEY` (Bearer token)
    - Frontend ↔ Backend: Session cookie (HMAC-signed, 1-year expiry)
    - Backend ↔ Telegram: Bot token (webhook)
    - Extension ↔ Anthropic: Optional, user-provided API key (for token counting)
@@ -619,7 +619,7 @@ git push --force --tags
 3. **Data sensitivity**: 
    - Low: Usage percentages, reset times, org IDs, subscription tier
    - Medium: Account email, Telegram chat IDs, user notes
-   - High: `ATLAS_API_KEY`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN`, Anthropic API key (if user provides)
+   - High: `SERVER_API_KEY`, `DASHBOARD_PASSWORD`, `TELEGRAM_BOT_TOKEN`, Anthropic API key (if user provides)
 
 4. **GPL-3.0 Compliance**: 
    - Extension is fork of GPL-3.0 work (lugia19/Claude-Usage-Extension)

@@ -13,5 +13,5 @@ services:
 
 networks:
   proxy:
-    name: atlas-network
+    name: server-network
     external: true

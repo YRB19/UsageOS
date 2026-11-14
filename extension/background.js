@@ -1,28 +1,28 @@
 import './lib/browser-polyfill.min.js';
-import { atlasSync, AtlasSync } from './bg-components/atlasSync.js';
+import { serverSync, ServerSync } from './bg-components/serverSync.js';
 
-messageRegistry.register('atlasSaveSettings', async (message) => {
-	await AtlasSync.saveSettings(message.url, message.apiKey);
-	await atlasSync.init(true);
+messageRegistry.register('serverSaveSettings', async (message) => {
+	await ServerSync.saveSettings(message.url, message.apiKey);
+	await serverSync.init(true);
 	return true;
 });
 
-messageRegistry.register('atlasTestConnection', () => atlasSync.testConnection());
+messageRegistry.register('serverTestConnection', () => serverSync.testConnection());
 
 messageRegistry.register('getAccountHistory', async (message) => {
 	const { orgId } = message;
 	if (!orgId) return { ok: false, reason: 'missing_orgId' };
-	return atlasSync.getAccountHistory(orgId);
+	return serverSync.getAccountHistory(orgId);
 });
 
 messageRegistry.register('getAllAccountsFromBackend', async () => {
-	return atlasSync.getAllAccountsFromBackend();
+	return serverSync.getAllAccountsFromBackend();
 });
 
 messageRegistry.register('putNote', async (message) => {
 	const { orgId, content } = message;
 	if (!orgId) return { ok: false, reason: 'missing_orgId' };
-	return atlasSync.putNote(orgId, content);
+	return serverSync.putNote(orgId, content);
 });
 
 // Per-account notes & nicknames
@@ -906,12 +906,12 @@ async function runAuthoritativePass({ orgId, conversationId, api, tabId }) {
 	await updateAllTabsWithUsage(usageData);
 	await updateTabWithConversationData(tabId, conversationData);
 
-	// Sync usage to Atlas backend (non-blocking)
+	// Sync usage to SERVER backend (non-blocking)
 	try {
 		const email = await api.getAccountEmail();
-		atlasSync.sync(orgId, email, usageData).catch(() => {});
+		serverSync.sync(orgId, email, usageData).catch(() => {});
 	} catch (err) {
-		await Log('warn', 'ATLAS sync error:', err);
+		await Log('warn', 'SERVER sync error:', err);
 	}
 
 	await conversationCache.set(conversationId, conversationData.toJSON(), CONVERSATION_CACHE_TTL);
@@ -1347,7 +1347,7 @@ for (const handler of functionsPendingUntilInitialization) {
 functionsPendingUntilInitialization = [];
 Log("Done initializing.")
 
-atlasSync.flushOnStartup().catch(() => {});
+serverSync.flushOnStartup().catch(() => {});
 
 if (isElectron) {
 	const ELECTRON_POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes

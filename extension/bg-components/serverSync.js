@@ -1,9 +1,9 @@
 /**
- * atlasSync.js
+ * serverSync.js
  * Handles all communication between the extension and the UsageOS backend.
  * Non-blocking: sync failures are queued and retried, never block the UI.
  *
- * Auth settings (atlasUrl / atlasApiKey) are read from storage on EVERY request —
+ * Auth settings (serverUrl / serverApiKey) are read from storage on EVERY request —
  * never cached on the instance — so a key saved in Options takes effect on the
  * next send, not the next worker restart. A 401/403 pauses sending entirely
  * instead of hammering the endpoint.
@@ -12,11 +12,11 @@
 import { getStorageValue, setStorageValue, RawLog } from './utils.js';
 
 async function Log(...args) {
-    await RawLog('atlasSync', ...args);
+    await RawLog('serverSync', ...args);
 }
 
-const OFFLINE_QUEUE_KEY = 'atlasSync_offlineQueue';  // chrome.storage.local
-const PAUSED_UNTIL_KEY  = 'atlasSync_pausedUntil';   // chrome.storage.local
+const OFFLINE_QUEUE_KEY = 'serverSync_offlineQueue';  // chrome.storage.local
+const PAUSED_UNTIL_KEY  = 'serverSync_pausedUntil';   // chrome.storage.local
 const MAX_QUEUE_SIZE    = 200;
 const SYNC_TIMEOUT_MS   = 8000;
 const SYNC_INTERVAL_MS  = 5 * 60 * 1000;
@@ -29,7 +29,7 @@ const LIMIT_KEY_MAP = {
     opusWeekly:   'opus_weekly'
 };
 
-class AtlasSync {
+class ServerSync {
     constructor() {
         this._ready = false;
         this._accountsCache = null; // { orgId → { id, ... } }
@@ -45,14 +45,14 @@ class AtlasSync {
     }
 
     static async getSettings() {
-        const url    = await getStorageValue('atlasUrl', '');
-        const apiKey = await getStorageValue('atlasApiKey', '');
+        const url    = await getStorageValue('serverUrl', '');
+        const apiKey = await getStorageValue('serverApiKey', '');
         return { url, apiKey };
     }
 
     static async saveSettings(url, apiKey) {
-        await setStorageValue('atlasUrl', url?.trim() || '');
-        await setStorageValue('atlasApiKey', apiKey?.trim() || '');
+        await setStorageValue('serverUrl', url?.trim() || '');
+        await setStorageValue('serverApiKey', apiKey?.trim() || '');
     }
 
     async isConfigured() {
@@ -62,7 +62,7 @@ class AtlasSync {
 
     // Fresh read from chrome.storage on every call. No module/instance copy.
     async _getAuth() {
-        const { url, apiKey } = await AtlasSync.getSettings();
+        const { url, apiKey } = await ServerSync.getSettings();
         const baseUrl = (url || '').trim().replace(/\/$/, '') || null;
         const key     = (apiKey || '').trim() || null;
         return { baseUrl, apiKey: key };
@@ -353,15 +353,15 @@ class AtlasSync {
     }
 }
 
-export const atlasSync = new AtlasSync();
-export { AtlasSync };
+export const serverSync = new ServerSync();
+export { ServerSync };
 
 // Resume when the key or server URL changes in Options — no need to wait out the 60s.
 try {
     browser.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
-        if (changes.atlasUrl || changes.atlasApiKey) {
-            atlasSync._resume('settings changed').catch(() => {});
+        if (changes.serverUrl || changes.serverApiKey) {
+            serverSync._resume('settings changed').catch(() => {});
         }
     });
 } catch {
@@ -369,8 +369,8 @@ try {
 }
 
 setInterval(async () => {
-    await atlasSync.init();
-    if (await atlasSync.isConfigured()) {
-        await atlasSync.flushOnStartup();
+    await serverSync.init();
+    if (await serverSync.isConfigured()) {
+        await serverSync.flushOnStartup();
     }
 }, SYNC_INTERVAL_MS);

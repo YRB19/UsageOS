@@ -30,9 +30,9 @@ function toggleKeyVisibility() {
 }
 
 async function loadSettings() {
-	const { atlasUrl, atlasApiKey } = await browser.storage.local.get(['atlasUrl', 'atlasApiKey']);
-	document.getElementById('server-url').value = atlasUrl || '';
-	document.getElementById('api-key').value = atlasApiKey || '';
+	const { serverUrl, serverApiKey } = await browser.storage.local.get(['serverUrl', 'serverApiKey']);
+	document.getElementById('server-url').value = serverUrl || '';
+	document.getElementById('api-key').value = serverApiKey || '';
 }
 
 async function saveSettings() {
@@ -46,7 +46,7 @@ async function saveSettings() {
 
 	try {
 		await browser.runtime.sendMessage({
-			type: 'atlasSaveSettings',
+			type: 'serverSaveSettings',
 			url,
 			apiKey
 		});
@@ -69,7 +69,7 @@ async function testConnection() {
 	showStatus('Testing connection...', 'info');
 
 	try {
-		const response = await browser.runtime.sendMessage({ type: 'atlasTestConnection' });
+		const response = await browser.runtime.sendMessage({ type: 'serverTestConnection' });
 		if (response?.ok) {
 			showStatus(`Connection successful (HTTP ${response?.status ?? 200})`, 'success');
 		} else if (response?.reason === 'not_configured') {

@@ -44,7 +44,7 @@ UsageOS/
 │   └── nginx.conf           serves the build and proxies /api/ to the backend
 ├── extension/               Chromium MV3 extension (fork of lugia19/Claude-Usage-Extension)
 │   ├── background.js        service worker
-│   ├── bg-components/       atlasSync.js (backend sync + offline queue), claude-api.js, ...
+│   ├── bg-components/       serverSync.js (backend sync + offline queue), claude-api.js, ...
 │   ├── injections/          code injected into the claude.ai page (usage SSE watcher)
 │   ├── content-components/  UI injected into claude.ai (sidebar notes, usage panel)
 │   ├── options.html/js      server URL + API key + sync status
@@ -63,7 +63,7 @@ sequenceDiagram
     participant B as Backend
     participant D as Dashboard
     participant T as Telegram
-    X->>B: POST /api/v1/sync (Bearer ATLAS_API_KEY)
+    X->>B: POST /api/v1/sync (Bearer SERVER_API_KEY)
     B->>B: upsert Account by org_id, append SyncEvent
     D->>B: POST /api/v1/auth/login (password)
     B-->>D: signed session cookie
@@ -77,8 +77,8 @@ sequenceDiagram
 
 Two kinds of auth exist on purpose:
 
-- **Extension to backend:** `Authorization: Bearer <ATLAS_API_KEY>` on `/sync`.
-- **Dashboard to backend:** a signed, `HttpOnly` session cookie obtained from `/auth/login` (password is `DASHBOARD_PASSWORD`, falling back to `ATLAS_API_KEY`). Every dashboard endpoint also accepts the Bearer key, which is handy for `curl`.
+- **Extension to backend:** `Authorization: Bearer <SERVER_API_KEY>` on `/sync`.
+- **Dashboard to backend:** a signed, `HttpOnly` session cookie obtained from `/auth/login` (password is `DASHBOARD_PASSWORD`, falling back to `SERVER_API_KEY`). Every dashboard endpoint also accepts the Bearer key, which is handy for `curl`.
 
 ## Prerequisites
 
@@ -95,7 +95,7 @@ Two kinds of auth exist on purpose:
 ```bash
 git clone https://github.com/YRB19/UsageOS.git
 cd UsageOS
-cp .env.example .env        # fill in POSTGRES_PASSWORD and ATLAS_API_KEY
+cp .env.example .env        # fill in POSTGRES_PASSWORD and SERVER_API_KEY
 docker compose up -d --build
 ```
 
@@ -105,7 +105,7 @@ After **any** code change rebuild with `docker compose up -d --build <service>`.
 
 ```bash
 docker compose logs -f backend
-docker compose exec postgres psql -U atlas -d atlas
+docker compose exec postgres psql -U server -d server
 ```
 
 ## Option B: hot reload development
@@ -125,8 +125,8 @@ cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-export DATABASE_URL=postgresql://atlas:<POSTGRES_PASSWORD>@localhost:5432/atlas
-export ATLAS_API_KEY=dev-key
+export DATABASE_URL=postgresql://server:<POSTGRES_PASSWORD>@localhost:5432/server
+export SERVER_API_KEY=dev-key
 export DASHBOARD_PASSWORD=dev
 
 uvicorn app.main:app --reload --port 8000
@@ -198,14 +198,14 @@ Rules that have caused real bugs:
 - `extension/manifest.json` must be an exact copy of `manifest_chrome.json`. After editing the latter: `cp extension/manifest_chrome.json extension/manifest.json`.
 - `content-components/ui_dataclasses.js` is **generated** from `shared/dataclasses.js`. After changing the source: `cd extension && node scripts/build-dataclasses.js`.
 - Never reference a file from a content script unless it exists, or Chrome refuses to load the whole extension.
-- `atlasSync.js` must never cache failed lookups (for example an unresolved email), or one failure sticks for a day.
+- `serverSync.js` must never cache failed lookups (for example an unresolved email), or one failure sticks for a day.
 - `manifest_firefox.json` ships but Firefox is not a tested target.
 
 `extension/README.md` lists what differs from upstream.
 
 ## API reference
 
-Base path `/api/v1`. "Key" means `Authorization: Bearer <ATLAS_API_KEY>`. "Dashboard" means session cookie **or** key.
+Base path `/api/v1`. "Key" means `Authorization: Bearer <SERVER_API_KEY>`. "Dashboard" means session cookie **or** key.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -246,7 +246,7 @@ Example sync payload:
 ```
 
 ```bash
-curl -s http://localhost:8000/api/v1/accounts -H "Authorization: Bearer $ATLAS_API_KEY"
+curl -s http://localhost:8000/api/v1/accounts -H "Authorization: Bearer $SERVER_API_KEY"
 ```
 
 ## Data model

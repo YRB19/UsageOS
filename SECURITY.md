@@ -14,5 +14,5 @@ Examples: bypassing the dashboard login or the API key check, reading or changin
 
 - Serve it over HTTPS only if it is reachable from the internet.
 - Keep `.env` private and never commit it.
-- Use long random values for `ATLAS_API_KEY`, `DASHBOARD_PASSWORD` and `TELEGRAM_WEBHOOK_SECRET`.
+- Use long random values for `SERVER_API_KEY`, `DASHBOARD_PASSWORD` and `TELEGRAM_WEBHOOK_SECRET`.
 - See DEPLOY.md for how to rotate each secret.

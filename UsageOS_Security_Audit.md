@@ -3,7 +3,7 @@
 **Date:** 2026-11-14 · **Scope:** the uploaded `UsageOS.zip` (full working tree **and** the 75-commit `.git` history), plus review of the OpenCode `SECURITY_AUDIT.md`.
 **Method:** read every backend router, auth, models, Dockerfiles, compose files, nginx config, extension manifests/background/sync/bridges/dashboard, frontend sinks; scanned the whole git history for secrets and personal strings; ran `pip-audit` and `npm audit`; wrote small tests for two suspected issues.
 
-> **Do not commit the old `SECURITY_AUDIT.md`.** It prints your local `.env` values (DB password, `ATLAS_API_KEY`, dashboard password) in cleartext, and several of its findings are wrong (see Part 5).
+> **Do not commit the old `SECURITY_AUDIT.md`.** It prints your local `.env` values (DB password, `SERVER_API_KEY`, dashboard password) in cleartext, and several of its findings are wrong (see Part 5).
 
 ---
 
@@ -109,11 +109,11 @@ Also `telegram_webhook.py:91` logs the full chat id and message text; log less (
 **M1. Hardcoded personal domain + extension ID**, see P1/P2. Severity is medium (not "critical" as the old audit said): the extension only contacts the URL the user types, but the manifest asks every installer for standing permission to *your* domain, which is also an identity leak.
 
 **M2. API key compare is not constant-time, and an empty key isn't rejected**
-`backend/app/auth.py:22-23`: `token != settings.atlas_api_key`. The dashboard path (line ~63) correctly uses `hmac.compare_digest`; this one doesn't. Also, with `ATLAS_API_KEY=""`, `Authorization: Bearer ` could match an empty key. Docker is protected (`${ATLAS_API_KEY:?…}` in compose rejects empty), but the non-Docker path in README-dev isn't.
+`backend/app/auth.py:22-23`: `token != settings.server_api_key`. The dashboard path (line ~63) correctly uses `hmac.compare_digest`; this one doesn't. Also, with `SERVER_API_KEY=""`, `Authorization: Bearer ` could match an empty key. Docker is protected (`${SERVER_API_KEY:?…}` in compose rejects empty), but the non-Docker path in README-dev isn't.
 ```python
-if not settings.atlas_api_key or not hmac.compare_digest(token, settings.atlas_api_key): ...
+if not settings.server_api_key or not hmac.compare_digest(token, settings.server_api_key): ...
 ```
-and refuse to start (raise in `config.py`) if `ATLAS_API_KEY` is empty or shorter than ~32 chars.
+and refuse to start (raise in `config.py`) if `SERVER_API_KEY` is empty or shorter than ~32 chars.
 
 **M3. Login rate limit is bypassable and sessions can't be revoked**
 - `routers/auth.py:26` trusts the first `X-Forwarded-For` entry from the client, so an attacker can rotate that header to dodge the 8/min limit if requests reach nginx directly. Use the *last* hop your proxy appended (or `request.client.host` behind `--proxy-headers`). The counter is also per-process memory, and the backend runs `--workers 2`.
@@ -147,7 +147,7 @@ and refuse to start (raise in `config.py`) if `ATLAS_API_KEY` is empty or shorte
 - **L1.** `backend/app/routers/notes.py` is a **dead, unauthenticated** duplicate of the notes routes (not mounted in `main.py`). Delete it so nobody mounts it by accident.
 - **L2.** No `max_length` on `SyncPayload` fields, `NoteIn.content`, or `limit` query params (`accounts.py` `limit<=0` returns everything; `sync.py` `limit` unbounded). Add `Field(max_length=…)` / clamp like `alerts.py` already does.
 - **L3.** Extension dashboard: `escapeHtml()` (`dashboard.js:775`) uses `textContent→innerHTML`, which does **not** escape `"`; and `data-org-id="${account.orgId}"` is unescaped. Not exploitable today (values come from your own claude.ai/server), but use a real attribute escaper.
-- **L4.** `GET /api/v1/sync/connection-test` (used by `atlasSync.js` to test the key) has **no route of its own**; it works only because `/sync/{org_id}` swallows it and requires auth. Fine, but add an explicit `/sync/connection-test` returning `{"ok": true}` so it doesn't depend on that accident.
+- **L4.** `GET /api/v1/sync/connection-test` (used by `serverSync.js` to test the key) has **no route of its own**; it works only because `/sync/{org_id}` swallows it and requires auth. Fine, but add an explicit `/sync/connection-test` returning `{"ok": true}` so it doesn't depend on that accident.
 - **L5.** `CORS: ["*"]` (`config.py:12`) is low risk: `allow_credentials=False`, and the dashboard is same-origin. Still, make it configurable (`CORS_ORIGINS`, default empty/same-origin).
 - **L6.** `backend/pyproject.toml` has the placeholder `Your Name <your-email@example.com>`, plus stale/unused deps (`python-jose`, `passlib`, and `fastapi ^0.110` vs the pinned 0.115). Set a real author or remove the field; delete unused deps (`python-jose` has its own CVEs).
 - **L7.** `.github/workflows/` is empty. Add a CI workflow: `pip-audit`, `npm audit --omit=dev`, `gitleaks`.

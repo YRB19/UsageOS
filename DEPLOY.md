@@ -10,7 +10,7 @@ Any Linux machine with Docker and Docker Compose v2 works (a small VPS, a home s
 git clone https://github.com/YRB19/UsageOS.git
 cd UsageOS
 cp .env.example .env
-nano .env                      # POSTGRES_PASSWORD, ATLAS_API_KEY, DASHBOARD_PASSWORD
+nano .env                      # POSTGRES_PASSWORD, SERVER_API_KEY, DASHBOARD_PASSWORD
 docker compose up -d --build
 curl -s http://localhost:3000/api/v1/health
 ```
@@ -47,7 +47,7 @@ Point a public hostname at `http://localhost:3000` in your tunnel config. If you
 
 ## 3. Connect the extension
 
-Use your public address as the **Server URL** (`https://usageos.example.com`, no trailing slash) and the `ATLAS_API_KEY` from `.env` as the **API Key**. See README.md for the full steps.
+Use your public address as the **Server URL** (`https://usageos.example.com`, no trailing slash) and the `SERVER_API_KEY` from `.env` as the **API Key**. See README.md for the full steps.
 
 ## 4. Telegram alerts (optional)
 
@@ -73,19 +73,19 @@ Database changes are applied automatically at startup. `docker compose restart` 
 All data lives in the `postgres_data` Docker volume (avatars are in `usageos_uploads`). A simple nightly dump:
 
 ```bash
-docker compose exec -T postgres pg_dump -U atlas atlas | gzip > usageos-$(date +%F).sql.gz
+docker compose exec -T postgres pg_dump -U server server | gzip > usageos-$(date +%F).sql.gz
 ```
 
-Restore into an empty database with `gunzip -c file.sql.gz | docker compose exec -T postgres psql -U atlas atlas`.
+Restore into an empty database with `gunzip -c file.sql.gz | docker compose exec -T postgres psql -U server server`.
 
 ## 7. Rotating secrets
 
 | Secret | How to rotate |
 |---|---|
 | `DASHBOARD_PASSWORD` | Change it in `.env`, then `docker compose up -d`. Everyone is signed out and must log in again. |
-| `ATLAS_API_KEY` | `openssl rand -hex 32`, update `.env`, run `docker compose up -d`, then paste the new key into the extension's Options page. |
+| `SERVER_API_KEY` | `openssl rand -hex 32`, update `.env`, run `docker compose up -d`, then paste the new key into the extension's Options page. |
 | `TELEGRAM_BOT_TOKEN` | Send `/revoke` to @BotFather, put the new token in `.env`, restart the backend, and run `setWebhook` again. |
-| `POSTGRES_PASSWORD` | Changing `.env` alone does not change the database user. Run `ALTER USER atlas PASSWORD '<new>'` inside Postgres first, then update `.env` and restart. |
+| `POSTGRES_PASSWORD` | Changing `.env` alone does not change the database user. Run `ALTER USER server PASSWORD '<new>'` inside Postgres first, then update `.env` and restart. |
 
 ## 8. Troubleshooting
 

@@ -10,6 +10,6 @@ async def verify_api_key(authorization: str = Security(api_key_header)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid Authorization format")
     token = authorization.split(" ")[1]
-    if token != settings.atlas_api_key:
+    if token != settings.server_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return token
