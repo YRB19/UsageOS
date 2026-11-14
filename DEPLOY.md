@@ -1,235 +1,98 @@
-# ATLAS Claude — Deployment Guide
+# Deploying UsageOS
 
-## Directory layout on your server
+This guide covers running UsageOS on a server you control and reaching it over HTTPS. For a quick local try-out, the Quick start in [README.md](README.md) is enough.
 
-```
-~/atlas/
-├── docker-compose.yml
-├── .env
-├── atlas-claude-backend/
-│   ├── app/
-│   ├── alembic/
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   ├── alembic.ini
-│   └── .env          ← (optional, values in root .env take priority)
-└── atlas-claude-ui/
-    ├── src/
-    ├── Dockerfile
-    ├── nginx.conf
-    └── package.json
-```
+## 1. Server basics
 
----
-
-## Step 1 — Clone / copy files to your server
+Any Linux machine with Docker and Docker Compose v2 works (a small VPS, a home server, a Raspberry Pi 4+). UsageOS is light: Postgres, a small API and a static site.
 
 ```bash
-# On your Ubuntu server
-mkdir -p ~/atlas
-cd ~/atlas
-
-# Copy the project files (scp, rsync, or git clone)
-# scp -r atlas-claude-backend atlas-claude-ui docker-compose.yml .env you@server:~/atlas/
-```
-
----
-
-## Step 2 — Generate a secure API key
-
-```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Copy the output. You'll use it in both `.env` and the Chrome extension settings.
-
----
-
-## Step 3 — Configure `.env`
-
-```bash
-cd ~/atlas
-nano .env
-```
-
-Fill in:
-```env
-POSTGRES_USER=atlas
-POSTGRES_PASSWORD=<strong password>
-POSTGRES_DB=atlas
-ATLAS_API_KEY=<key from step 2>
-```
-
-**If Postgres is already running in your ATLAS stack:**
-- Remove the `postgres` service block from `docker-compose.yml`
-- Make sure `atlas-network` is added to your existing Postgres service
-- Update `DATABASE_URL` to point at your existing container name
-
----
-
-## Step 4 — Build and start
-
-```bash
-cd ~/atlas
-
-# First deploy: run migrations then start everything
+git clone https://github.com/YRB19/UsageOS.git
+cd UsageOS
+cp .env.example .env
+nano .env                      # POSTGRES_PASSWORD, ATLAS_API_KEY, DASHBOARD_PASSWORD
 docker compose up -d --build
-
-# Watch logs to confirm startup
-docker compose logs -f atlas-claude-backend
+curl -s http://localhost:3000/api/v1/health
 ```
 
-Expected output:
+By default the dashboard listens on port `3000` (change with `USAGEOS_PORT`). The API (`8000`) and Postgres (`5432`) only listen on `127.0.0.1`, so they are not reachable from outside the machine.
+
+## 2. HTTPS and a domain
+
+Browsers will only let the extension talk to your server over HTTPS (except for `localhost`), and Telegram requires it. Pick one:
+
+### Caddy on the same machine
+
 ```
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
+usageos.example.com {
+    reverse_proxy localhost:3000
+}
 ```
 
----
+Caddy gets and renews the certificate automatically. Point your domain's DNS at the server and open ports 80 and 443.
 
-## Step 5 — Verify the API
+### Caddy (or another proxy) running in Docker
+
+If your proxy lives in its own Docker network, attach only the dashboard container to it:
 
 ```bash
-# From the server itself
-curl http://localhost:8420/api/v1/health \
-  -H "Authorization: Bearer <your-api-key>"
-
-# Expected:
-# {"status":"ok","db":"ok","accounts":0}
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
 ```
 
----
+Edit the network name in `docker-compose.proxy.yml` to match yours, then proxy to `usageos-frontend:80`.
 
-## Step 6 — Cloudflare Tunnel setup
+### Cloudflare Tunnel (no open ports)
 
-If you're already using Cloudflare Tunnel for your other ATLAS services, add ATLAS Claude to your tunnel config.
+Point a public hostname at `http://localhost:3000` in your tunnel config. If you run `cloudflared` as a systemd service, check which config file it actually reads (usually `/etc/cloudflared/config.yml`, not the one in your home directory) before editing.
 
-### Option A — Two subdomains (cleanest)
+## 3. Connect the extension
 
-```yaml
-# In your cloudflared config.yml
-ingress:
-  - hostname: claude.yourdomain.com          # React dashboard
-    service: http://localhost:8421
-  - hostname: claude-api.yourdomain.com      # FastAPI backend
-    service: http://localhost:8420
-  # ... your existing routes ...
-  - service: http_status:404
-```
+Use your public address as the **Server URL** (`https://usageos.example.com`, no trailing slash) and the `ATLAS_API_KEY` from `.env` as the **API Key**. See README.md for the full steps.
 
-Then in the extension Options page, set:
-- **Server URL**: `https://claude-api.yourdomain.com`
+## 4. Telegram alerts (optional)
 
-### Option B — Single subdomain (nginx handles routing)
-
-```yaml
-ingress:
-  - hostname: claude.yourdomain.com
-    service: http://localhost:8421    # nginx proxies /api/ internally to the backend
-```
-
-The included `nginx.conf` already handles this — `/api/` is proxied to `atlas-claude-backend:8000`.
-
-In the extension Options page, set:
-- **Server URL**: `https://claude.yourdomain.com`
-
----
-
-## Step 7 — Install and configure the Chrome extension
-
-1. In Chrome → `chrome://extensions` → enable **Developer mode**
-2. Click **Load unpacked** → select the `claude-usage-tracker-multiaccount` folder
-3. Click the extension icon → click **⚙ Settings**
-4. Fill in:
-   - **Server URL**: your Cloudflare Tunnel URL (e.g. `https://claude-api.yourdomain.com`)
-   - **API Key**: the key from Step 2
-5. Click **Test connection** — you should see ✓ Connected
-
----
-
-## Step 8 — Open Claude and verify sync
-
-1. Open [claude.ai](https://claude.ai) and send any message
-2. Open your dashboard at `https://claude.yourdomain.com`
-3. Your account should appear with live usage data
-
-For each additional Claude account:
-- Sign into that account in a different Chrome profile (or Firefox container)
-- Make sure the extension is installed there too
-- Send a message — it syncs automatically
-
----
-
-## Useful commands
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` in `.env`, run `docker compose up -d --build backend`, then register the webhook with the same secret:
 
 ```bash
-# View live backend logs
-docker compose logs -f atlas-claude-backend
-
-# Restart only the backend
-docker compose restart atlas-claude-backend
-
-# Run Alembic migrations manually (after pulling new code)
-docker compose run --rm atlas-claude-migrate
-
-# Open a psql shell into Postgres
-docker compose exec postgres psql -U atlas -d atlas
-
-# Check how many accounts are tracked
-docker compose exec postgres psql -U atlas -d atlas \
-  -c "SELECT email, nickname, last_seen_at FROM accounts ORDER BY last_seen_at DESC;"
-
-# Stop everything
-docker compose down
-
-# Stop + wipe database (careful!)
-docker compose down -v
+curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d "url=https://usageos.example.com/api/v1/telegram/webhook" \
+  -d "secret_token=<WEBHOOK_SECRET>"
 ```
 
----
-
-## Updating
+## 5. Updating
 
 ```bash
-cd ~/atlas
-git pull            # or copy new files
+git pull
 docker compose up -d --build
-
-# Migrations run automatically via the atlas-claude-migrate service
 ```
 
----
+Database changes are applied automatically at startup. `docker compose restart` does not pick up new code.
 
-## Troubleshooting
+## 6. Backups
 
-| Symptom | Fix |
+All data lives in the `postgres_data` Docker volume (avatars are in `usageos_uploads`). A simple nightly dump:
+
+```bash
+docker compose exec -T postgres pg_dump -U atlas atlas | gzip > usageos-$(date +%F).sql.gz
+```
+
+Restore into an empty database with `gunzip -c file.sql.gz | docker compose exec -T postgres psql -U atlas atlas`.
+
+## 7. Rotating secrets
+
+| Secret | How to rotate |
 |---|---|
-| Extension shows "not_configured" | Set Server URL + API Key in extension Options → ⚙ |
-| Test connection fails | Check Cloudflare Tunnel is running: `cloudflared tunnel status` |
-| `401 Unauthorized` from API | API key mismatch — must match exactly in `.env` and extension settings |
-| Dashboard shows 0 accounts | Open claude.ai and send a message first; sync fires on each message |
-| Postgres connection refused | Check `POSTGRES_USER/PASSWORD/DB` match across `.env` and DB init |
-| Port 8420/8421 already in use | Change host ports in `docker-compose.yml` (container ports stay 8000/80) |
+| `DASHBOARD_PASSWORD` | Change it in `.env`, then `docker compose up -d`. Everyone is signed out and must log in again. |
+| `ATLAS_API_KEY` | `openssl rand -hex 32`, update `.env`, run `docker compose up -d`, then paste the new key into the extension's Options page. |
+| `TELEGRAM_BOT_TOKEN` | Send `/revoke` to @BotFather, put the new token in `.env`, restart the backend, and run `setWebhook` again. |
+| `POSTGRES_PASSWORD` | Changing `.env` alone does not change the database user. Run `ALTER USER atlas PASSWORD '<new>'` inside Postgres first, then update `.env` and restart. |
 
----
+## 8. Troubleshooting
 
-## Architecture reminder
-
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
 ```
-Claude.ai (browser tab)
-      │
-      ▼
-Chrome Extension (intercepts requests)
-      │  POST /api/v1/sync  every message
-      ▼
-FastAPI :8420  ──────────────────────────────────────────┐
-      │                                                   │
-      ▼                                                   │
-PostgreSQL                                                │
-      │                                                   │
-      ▼                                                   │
-React Dashboard :8421  ◄── GET /api/v1/dashboard (60s) ──┘
-      │
-      ▼
-Cloudflare Tunnel → public HTTPS
-```
+
+502 errors from your proxy usually mean it cannot reach the `usageos-frontend` container: check that they share a Docker network (see the proxy override above).

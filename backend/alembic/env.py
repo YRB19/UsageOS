@@ -13,7 +13,8 @@ from app import models
 
 config = context.config
 
-if config.config_file_name is not None:
+# Skip when started from inside the app (app/migrations.py), so uvicorn's loggers are left alone.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Request, Depends
+import hmac
+from fastapi import APIRouter, Request, Depends, HTTPException
+from app.config import settings
 from sqlalchemy.orm import Session
 from app.database import get_sync_db
 from app.models import Account, SyncEvent, AccountNote
@@ -74,6 +76,15 @@ async def send_safe(chat_id: str, text: str):
 
 @router.post("/webhook")
 async def telegram_webhook(request: Request, db: Session = Depends(get_sync_db)):
+    # Only Telegram knows the secret it was given in setWebhook. Fail closed when none is configured.
+    expected = settings.telegram_webhook_secret
+    received = request.headers.get("x-telegram-bot-api-secret-token", "")
+    if not expected:
+        logger.warning("Telegram webhook called but TELEGRAM_WEBHOOK_SECRET is not set; rejecting")
+        raise HTTPException(status_code=403, detail="Webhook not configured")
+    if not hmac.compare_digest(received.encode(), expected.encode()):
+        raise HTTPException(status_code=403, detail="Invalid secret token")
+
     try:
         payload = await request.json()
     except Exception:
@@ -93,6 +104,14 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_sync_db))
     parts = text.split(" ", 1)
     cmd = parts[0].lower()
     arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if cmd in ("/start", "id", "/id"):
+        await send_safe(
+            incoming_chat_id,
+            f"Your chat ID is <code>{incoming_chat_id}</code>\n\n"
+            "Paste it into the Telegram chat ID field of an account in the UsageOS dashboard to receive reset alerts here.",
+        )
+        return {"ok": True}
 
     if cmd == "note":
         if not arg:
@@ -171,6 +190,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_sync_db))
             "<code>usage</code> \u2014 Show usage for accounts linked to this chat\n"
             "<code>usage nickname</code> \u2014 Show usage for specific account\n"
             "<code>note nickname text</code> \u2014 Update notes for an account\n"
+            "<code>id</code> \u2014 Show this chat's ID\n"
             "<code>help</code> \u2014 Show this help"
         )
         await send_safe(incoming_chat_id, help_text)

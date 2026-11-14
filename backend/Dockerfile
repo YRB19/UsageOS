@@ -11,19 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir \
-    fastapi==0.115.0 \
-    uvicorn[standard]==0.32.0 \
-    sqlalchemy==2.0.36 \
-    alembic==1.13.3 \
-    asyncpg==0.29.0 \
-    psycopg2-binary==2.9.10 \
-    pydantic==2.10.3 \
-    pydantic-settings==2.6.1 \
-    python-dotenv==1.0.1 \
-    httpx==0.28.0 \
-    python-multipart==0.0.12
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

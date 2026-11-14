@@ -1,3 +1,4 @@
+# Single source of truth for runtime dependencies (the Dockerfile installs this file).
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 sqlalchemy==2.0.36
@@ -8,3 +9,4 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 httpx==0.28.0
+python-multipart==0.0.12

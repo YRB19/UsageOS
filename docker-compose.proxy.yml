@@ -1,0 +1,17 @@
+# Optional override for people who already run a reverse proxy (Caddy, Traefik, nginx)
+# in its own Docker network. It attaches ONLY the dashboard container to that network,
+# so the proxy can reach `usageos-frontend:80` while the database and API stay private.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
+#
+# Change the network name below to match your proxy's network.
+services:
+  frontend:
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    name: atlas-network
+    external: true

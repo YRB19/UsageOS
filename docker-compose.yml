@@ -1,22 +1,22 @@
+# UsageOS: works out of the box with `docker compose up -d --build`.
+# Running behind Caddy/Traefik on a shared Docker network? See docker-compose.proxy.yml.
 services:
   postgres:
     image: postgres:16-alpine
     container_name: usageos-postgres
     environment:
-      POSTGRES_USER: atlas
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: atlas
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5432:5432"   # local only; handy for development
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlas} -d ${POSTGRES_DB:-atlas}"]
       interval: 5s
       timeout: 5s
       retries: 5
-    networks:
-      - atlas-network
     restart: unless-stopped
 
   backend:
@@ -25,18 +25,21 @@ services:
       dockerfile: Dockerfile
     container_name: usageos-backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      ATLAS_API_KEY: ${ATLAS_API_KEY}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-atlas}
+      ATLAS_API_KEY: ${ATLAS_API_KEY:?Set ATLAS_API_KEY in .env}
+      # Password typed once per device on the dashboard login screen. Falls back to ATLAS_API_KEY when empty.
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      # Required for the Telegram webhook to accept messages (see README, Telegram section).
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     volumes:
       - usageos_uploads:/app/uploads
     ports:
-      - "8000:8000"
+      # Only reachable from this machine; the dashboard container proxies /api to it.
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - atlas-network
     restart: unless-stopped
 
   frontend:
@@ -45,20 +48,13 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
-        VITE_API_KEY: ${VITE_API_KEY}
     container_name: usageos-frontend
     ports:
-      - "3000:80"
+      - "${USAGEOS_PORT:-3000}:80"
     depends_on:
       - backend
-    networks:
-      - atlas-network
     restart: unless-stopped
 
 volumes:
   postgres_data:
   usageos_uploads:
-
-networks:
-  atlas-network:
-    external: true

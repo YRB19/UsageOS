@@ -1,0 +1,3 @@
+Rishit Dagli <rishit@rishit.online>==>Your Name <your-email@example.com>
+regex:usageos\.rishit\.online==>usageos.example.com
+regex:rishit\.online==>example.com
