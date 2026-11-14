@@ -42,13 +42,9 @@ UsageOS fixes that. A small browser extension quietly records usage from every a
 |---|---|
 | <img src="docs/screenshots/account-detail.png" alt="Account detail with usage history chart"> | <img src="docs/screenshots/alerts.png" alt="Alerts log"> |
 
-| Settings | On your phone |
+| Inside claude.ai (sidebar) | Mobile |
 |---|---|
-| <img src="docs/screenshots/settings.png" alt="Settings page"> | <img src="docs/screenshots/mobile.png" alt="Mobile dashboard" width="260"> |
-
-| Inside claude.ai (sidebar) |
-|---|
-| <img src="docs/screenshots/extension-sidebar.png" alt="UsageOS notes and usage in the claude.ai sidebar"> |
+| <img src="docs/screenshots/extension-sidebar.png" alt="UsageOS notes and usage in the claude.ai sidebar"> | <img src="docs/screenshots/mobile.png" alt="Mobile dashboard"> |
 
 > All screenshots use fictional demo data.
 
@@ -91,8 +87,8 @@ Open `.env` and set:
 | Variable | What to put |
 |---|---|
 | `POSTGRES_PASSWORD` | A password for the database. Letters and numbers only. `openssl rand -hex 16` makes a good one. |
-| `SERVER_API_KEY` | A long random secret shared with the extension. `openssl rand -hex 32` |
-| `DASHBOARD_PASSWORD` | The password you type to open the dashboard. Leave empty to reuse `SERVER_API_KEY`. |
+| `ATLAS_API_KEY` | A long random secret shared with the extension. `openssl rand -hex 32` |
+| `DASHBOARD_PASSWORD` | The password you type to open the dashboard. Leave empty to reuse `ATLAS_API_KEY`. |
 | `TELEGRAM_BOT_TOKEN` | Optional. Only needed for Telegram alerts (see below). |
 | `TELEGRAM_WEBHOOK_SECRET` | Optional. Only for Telegram. `openssl rand -hex 24` |
 
@@ -112,7 +108,7 @@ Quick health check: `curl http://localhost:3000/api/v1/health` should return `{"
 2. Click **Load unpacked** and choose the `extension/` folder from this repository.
 3. Click the UsageOS icon, then **Server**. Enter:
    - **Server URL**: `http://localhost:3000` (or your own domain if you set one up, with no trailing slash)
-   - **API Key**: the `SERVER_API_KEY` from your `.env`
+   - **API Key**: the `ATLAS_API_KEY` from your `.env`
 4. Press **Save** and accept Chrome's request to let the extension reach your server, then press **Test Connection**.
 5. Open claude.ai, sign in to an account and send a message. That account shows up on your dashboard within moments.
 
@@ -174,13 +170,13 @@ Database changes are applied automatically when the backend starts, and your dat
 | Problem | Fix |
 |---|---|
 | Dashboard is empty | Nothing has synced yet. Send a message on claude.ai while the extension is installed and configured. |
-| Extension: "API key rejected" | The key must match `SERVER_API_KEY` exactly. Fix it in the extension's Options page. |
+| Extension: "API key rejected" | The key must match `ATLAS_API_KEY` exactly. Fix it in the extension's Options page. |
 | Nothing syncs | Open the extension's Options page and read the sync status line. Press **Save** again so Chrome can grant access to your server, then **Test Connection**. |
 | An account shows "Unknown" as its email | The email could not be read for that account (common with Team or custom-named organizations). Everything else, including its nickname, still works. |
 | "Could not load manifest" when loading the extension | Make sure you selected the `extension/` folder itself, not the repository root. |
 | "Receiving end does not exist" or "context invalidated" | Reload the extension in `chrome://extensions`, then refresh your claude.ai tabs. |
 | Telegram alerts never arrive | Check that the webhook call returned `{"ok":true}` and used the same secret as `.env`, that a chat ID is saved on the account, and that alerts for that limit type are on in Settings. |
-| `docker compose up` complains about a missing variable | Fill in `POSTGRES_PASSWORD` and `SERVER_API_KEY` in `.env`. |
+| `docker compose up` complains about a missing variable | Fill in `POSTGRES_PASSWORD` and `ATLAS_API_KEY` in `.env`. |
 | Port 3000 is taken | Set `USAGEOS_PORT=3001` (or any free port) in `.env`. |
 
 Still stuck? [Open an issue](https://github.com/YRB19/UsageOS/issues) and include what the extension's Options page says.
@@ -188,7 +184,7 @@ Still stuck? [Open an issue](https://github.com/YRB19/UsageOS/issues) and includ
 ## Privacy and security
 
 - The extension reads usage figures, your account email, organization ID and subscription tier from claude.ai. It sends them **only to the server address you enter**. Message text is used locally to estimate usage and is never sent to your server. Full details are in [`extension/PRIVACY.md`](extension/PRIVACY.md).
-- Treat `SERVER_API_KEY`, `DASHBOARD_PASSWORD` and `TELEGRAM_BOT_TOKEN` like passwords. Never commit your `.env` file.
+- Treat `ATLAS_API_KEY`, `DASHBOARD_PASSWORD` and `TELEGRAM_BOT_TOKEN` like passwords. Never commit your `.env` file.
 - If a secret leaks: change it in `.env`, recreate the containers (`docker compose up -d`), and update the extension's Options page. For the bot token, send `/revoke` to @BotFather.
 - Expose UsageOS to the internet only over HTTPS.
 
