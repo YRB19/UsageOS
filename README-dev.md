@@ -189,7 +189,7 @@ Tips: use a window around 1440 x 900, hide bookmarks and other tabs, and check t
 
 ## Working on the extension
 
-1. `chrome://extensions`, **Developer mode**, **Load unpacked**, select `extension/`.
+1. `chrome://extensions` (or `brave://extensions` in Brave), **Developer mode**, **Load unpacked**, select `extension/`.
 2. After every code change press the reload icon on the extension card, then refresh your claude.ai tabs.
 3. Errors: the **Errors** button on the extension card (content scripts), the "service worker" link (background script console), and the sync status line on the Options page.
 
@@ -198,6 +198,7 @@ Rules that have caused real bugs:
 - `extension/manifest.json` must be an exact copy of `manifest_chrome.json`. After editing the latter: `cp extension/manifest_chrome.json extension/manifest.json`.
 - `content-components/ui_dataclasses.js` is **generated** from `shared/dataclasses.js`. After changing the source: `cd extension && node scripts/build-dataclasses.js`.
 - Never reference a file from a content script unless it exists, or Chrome refuses to load the whole extension.
+- The Chromium manifest uses the bundled `content-components/localization.js` and the background's `webRequest` listeners. The `common/` bridge scripts and `request_relay.js` belong to a different upstream layout and are not bundled here; adding those paths makes unpacked installation fail.
 - `serverSync.js` must never cache failed lookups (for example an unresolved email), or one failure sticks for a day.
 - `manifest_firefox.json` ships but Firefox is not a tested target.
 

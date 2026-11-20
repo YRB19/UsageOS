@@ -1,48 +1,7 @@
-# Claude Usage Tracker Extension
+# UsageOS Tracker
 
-Track your Claude.ai token usage across conversations with this browser extension.
+This Chromium extension reads usage and reset times from claude.ai and syncs snapshots to your self-hosted UsageOS dashboard. It is based on [Claude Usage Tracker by lugia19](https://github.com/lugia19/Claude-Usage-Extension), under the GPL-3.0 license.
 
-Also check out my other extension, [[Claude QoL](https://github.com/your-username/Claude-QoL)] (includes summarizing, TTS, STT and way more).
+Use the [UsageOS quick start](../README.md#quick-start) to run the server, load this folder as an unpacked extension, and connect it to the dashboard. For several Claude accounts, install and configure the extension in each browser profile you use. The UsageOS fork is installed from this repository.
 
-## Overview
-
-This extension helps you monitor how much of your Claude usage quota remains. It calculates token consumption from various sources including uploaded files, project knowledge, chat history, and AI responses.
-
-## Installation
-
-### Chrome
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/knemcdpkggnbhpoaaagmjiigenifejfo.svg)](https://chrome.google.com/webstore/detail/claude-usage-tracker/knemcdpkggnbhpoaaagmjiigenifejfo)
-
-### Firefox
-[![Mozilla Add-on](https://img.shields.io/amo/v/claude-usage-tracker.svg)](https://addons.mozilla.org/firefox/addon/claude-usage-tracker)
-
-### Desktop Client
-
-[MacOS/Windows installer](https://github.com/your-username/Claude-WebExtension-Launcher/releases/latest)
-
-## Features
-
-The extension tracks token usage from:
-
-- **Files** - Documents uploaded to chats or synced via Google Drive, Github, etc
-- **Projects** - Knowledge files and custom instructions
-- **Personal preferences** - Your configured settings
-- **Message history** - Full conversation context
-- **System prompts** - Enabled tools (analysis, artifacts) on a per-chat basis
-- **MOST MCPs/Integrations** - There are some limitations in cases where a "Knowledge" object is returned that I can't access, such as with web search
-
-Limitations:
-- **Web search results** - The full results are not exposed in the conversation history, so I can't track them properly
-- **Research** - Most of it happens on the backend, so I can't track it
- 
-Token calculation is handled either through Anthropic's API (if you provide your key) or via [gpt-tokenizer](https://github.com/niieani/gpt-tokenizer).
-
-## Privacy
-
-The extension fetches your organization ID from claude.ai to synchronize usage data across devices using Firebase. For full details, see the [privacy policy](PRIVACY.md).
-
-## UI
-
-Most elements in the chat UI (Namely the length, cost, estimate, caching status) have a tooltip explaining them further.
-
-![Claude Usage Tracker UI](https://github.com/your-username/Claude-Usage-Extension/blob/main/ui_screenshot.png?raw=true)
+See [what is synced and where it goes](PRIVACY.md) and the [developer guide](../README-dev.md#working-on-the-extension) for extension development.
