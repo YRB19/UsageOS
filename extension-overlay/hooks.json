@@ -1,0 +1,32 @@
+{
+  "_doc": "Anchored one-line edits to upstream files. Each hook inserts/replaces text next to an anchor that must occur EXACTLY ONCE in the upstream file. 'anchors' are tried in order, so add a fallback anchor when upstream code churns. If none match, the sync fails loudly and names the hook: nothing half-applied ever ships. Every inserted line is tagged USAGEOS-HOOK:<id> so check_extension.py can prove it's present.",
+  "hooks": [
+    {
+      "id": "bg-import",
+      "file": "background.js",
+      "op": "insert_before",
+      "anchors": ["//#region Variable declarations", "let processingLock = null;"],
+      "text": "import { forkSyncUsage } from './bg-components/forkHooks.js';"
+    },
+    {
+      "id": "bg-sync-usage",
+      "file": "background.js",
+      "op": "insert_before",
+      "anchors": [
+        "\tawait conversationCache.set(conversationId, conversationData.toJSON(), CONVERSATION_CACHE_TTL);\n\n\treturn true;",
+        "\tawait updateTabWithConversationData(tabId, conversationData);\n"
+      ],
+      "text": "\tawait forkSyncUsage(api, orgId, usageData);"
+    },
+    {
+      "id": "ui-notes",
+      "file": "content-components/usage_ui.js",
+      "op": "insert_before",
+      "anchors": ["\t\t// Add footers\n"],
+      "text": "\t\tif (window.UsageOSNotes) content.appendChild(window.UsageOSNotes.create());"
+    }
+  ],
+  "append_files": {
+    "tracker-styles.css": "fork-styles.css"
+  }
+}

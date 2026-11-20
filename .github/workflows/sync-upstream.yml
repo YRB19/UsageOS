@@ -1,0 +1,52 @@
+name: Sync extension with upstream (lugia19)
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"     # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build (blank = newest release)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Rebuild extension/ from upstream + overlay
+        id: build
+        run: |
+          set +e
+          python3 scripts/sync_extension.py ${{ github.event.inputs.tag && format('--to {0}', github.event.inputs.tag) || '' }} 2>&1 | tee sync.log
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          echo "tag=$(cat extension-overlay/upstream-version.txt 2>/dev/null)" >> "$GITHUB_OUTPUT"
+
+      - name: Open a PR with the rebuilt extension
+        if: steps.build.outputs.status == '0'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: sync/upstream
+          delete-branch: true
+          commit-message: "chore(extension): rebuild from upstream ${{ steps.build.outputs.tag }}"
+          title: "Extension: rebuild from upstream ${{ steps.build.outputs.tag }}"
+          body-path: sync.log
+          add-paths: |
+            extension/
+            extension-overlay/upstream-version.txt
+
+      - name: Open an issue if the overlay no longer applies
+        if: steps.build.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --title "Upstream sync failed - overlay needs attention" \
+            --body "$(printf 'The weekly sync could not rebuild the extension. Nothing was changed.\n\n```\n%s\n```\n\nUsually this means a hook anchor in `extension-overlay/hooks.json` no longer matches upstream. See extension-overlay/README.md.' "$(tail -40 sync.log)")"

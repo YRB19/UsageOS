@@ -1,0 +1,10 @@
+
+/* ---- UsageOS fork additions (appended to tracker-styles.css by sync_extension.py) ---- */
+.ut-notes-container { margin-top: 12px; padding-right: 4px; }
+.ut-notes-label { font-size: 12px; opacity: .65; margin-bottom: 4px; }
+.ut-notes-textarea {
+	width: 100%; min-height: 80px; padding: 8px; resize: none; box-sizing: border-box;
+	border-radius: 6px; font: inherit; font-size: 12px;
+	background: transparent; color: inherit; border: 1px solid rgba(127, 127, 127, .35);
+}
+.ut-notes-textarea:disabled { opacity: .55; cursor: not-allowed; }

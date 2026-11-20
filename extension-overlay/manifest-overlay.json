@@ -1,0 +1,22 @@
+{
+  "_doc": "Applied to each upstream manifest_<variant>.json. 'all' applies to every variant. Ops: set (dotted paths ok), delete, list_append {path: [items]}, list_insert [{path, before, items}].",
+  "all": {
+    "set": {
+      "name": "UsageOS Tracker",
+      "description": "Tracks your claude.ai usage across accounts and syncs it to your self-hosted UsageOS dashboard. Based on Claude Usage Tracker by lugia19 (GPL-3.0).",
+      "author": "UsageOS (fork of lugia19/Claude-Usage-Extension)",
+      "action.default_title": "UsageOS Tracker",
+      "optional_host_permissions": ["https://*/*", "http://*/*"],
+      "options_ui": { "page": "options.html", "open_in_tab": true }
+    },
+    "list_insert": [
+      { "path": "content_scripts.*.js", "before": "content-components/usage_ui.js", "items": ["content-components/fork_notes.js"] }
+    ],
+    "list_append": {
+      "web_accessible_resources.0.resources": ["tracker-styles.css"]
+    }
+  },
+  "chrome": {},
+  "firefox": { "set": { "incognito": "not_allowed" } },
+  "electron": {}
+}
