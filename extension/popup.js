@@ -1,4 +1,4 @@
-/* global UsageData, isPeakHours, localize, setLocaleOverride */
+/* global UsageData, isPeakHours, localize, pinLocale */
 'use strict';
 let CONFIG;
 const GREEN = '#22c55e';
@@ -104,7 +104,7 @@ function renderOrgUsage(orgResult, showLabel) {
 	if (activeLimits.length === 0) {
 		const empty = document.createElement('div');
 		empty.className = 'popup-empty';
-		empty.textContent = localize('popup.no_active_limits');
+		empty.textContent = (localize('popup.no_active_limits') !== 'popup.no_active_limits' ? localize('popup.no_active_limits') : 'No active limits');
 		wrapper.appendChild(empty);
 		return wrapper;
 	}
@@ -159,7 +159,7 @@ async function loadUsageData() {
 	const container = document.getElementById('usage-container');
 
 	const stored = await browser.storage.local.get('lastLang');
-	setLocaleOverride(stored.lastLang || 'en');
+	pinLocale(stored.lastLang || 'en');
 	applyStaticLocalization();
 
 	try {

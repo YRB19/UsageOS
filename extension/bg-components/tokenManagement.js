@@ -1,64 +1,46 @@
-/* global GPTTokenizer_o200k_base */
-import { CONFIG, sleep, RawLog, FORCE_DEBUG, StoredMap, getStorageValue, setStorageValue, removeStorageValue } from './utils.js';
+import { CONFIG, RawLog, StoredMap, getStorageValue, setStorageValue } from './utils.js';
 
 // Create component-specific logger
 async function Log(...args) {
 	await RawLog("tokenManagement", ...args);
 }
 const API_MODEL_SLUG = "claude-opus-5";
-// Move getTextFromContent here since it's token-related
-async function getTextFromContent(content, includeEphemeral = false, api = null, orgId = null) {
+// Text of one content block, for token counting, in one of two views:
+//
+// - Context (asOutput = false): what later turns send back to the model. Thinking drops out after
+//   its own turn; tool results do NOT. Verified 2026-10-07 (merged experience, Haiku 4.5): with
+//   tools forbidden, the model quoted lines from a file it had Read two turns earlier, and listed
+//   all ten results of an earlier web search, not just the one it cited.
+// - Output (asOutput = true): what the model generated - text, thinking and tool inputs. Tool
+//   results are excluded: they are fed to the model, not produced by it.
+//
+// Web-search results only carry title/url here; the page text the model saw is never exposed, so
+// it can't be counted.
+function getTextFromContent(content, asOutput = false) {
 	let textPieces = [];
 
 	if (content.text) {
 		textPieces.push(content.text);
 	}
 
-	if (content.thinking && includeEphemeral) {
+	if (content.thinking && asOutput) {
 		textPieces.push(content.thinking);
 	}
 
 	if (content.input) {
 		textPieces.push(JSON.stringify(content.input));
 	}
-	if (content.content) {
-		if (Array.isArray(content.content)) {
-			if (content.type !== "tool_result" || includeEphemeral) {
-				for (const nestedContent of content.content) {
-					textPieces = textPieces.concat(await getTextFromContent(nestedContent, includeEphemeral, api, orgId));
-				}
-			}
-		}
-		else if (typeof content.content === 'object') {
-			textPieces = textPieces.concat(await getTextFromContent(content.content, includeEphemeral, api, orgId));
-		}
+
+	if (content.type === "tool_result" && asOutput) {
+		return textPieces;
 	}
 
-	if (content.type === "knowledge" && includeEphemeral) {
-		if (content.url && content.url.length > 0) {
-			if (content.url.includes("docs.google.com")) {
-				if (api && orgId) {
-					const docUuid = content.metadata?.uri;
-					if (docUuid) {
-						const syncObj = { type: "gdrive", config: { uri: docUuid } };
-						await Log("Fetching Google Drive document content:", content.url, "with sync object:", syncObj);
-						try {
-							const syncText = await api.getSyncText(syncObj);
-							if (syncText) {
-								textPieces.push(syncText);
-								await Log("Retrieved Google Drive document content successfully:", syncText);
-							}
-						} catch (error) {
-							await Log("error", "Error fetching Google Drive document:", error);
-						}
-					} else {
-						await Log("error", "Could not extract document UUID from URL or metadata");
-					}
-				} else {
-					await Log("warn", "API or orgId not provided, cannot fetch Google Drive document");
-				}
-			}
+	if (Array.isArray(content.content)) {
+		for (const nestedContent of content.content) {
+			textPieces = textPieces.concat(getTextFromContent(nestedContent, asOutput));
 		}
+	} else if (content.content && typeof content.content === 'object') {
+		textPieces = textPieces.concat(getTextFromContent(content.content, asOutput));
 	}
 
 	return textPieces;
@@ -68,7 +50,8 @@ class TokenCounter {
 	constructor() {
 		this.tokenizer = GPTTokenizer_o200k_base;
 		this.ESTIMATION_MULTIPLIER = CONFIG.ESTIMATION_MULTIPLIER;
-		this.fileTokenCache = new StoredMap("fileTokens");
+		// API counts only. V2: the old store also held metadata estimates, from an older formula.
+		this.fileTokenCache = new StoredMap("fileTokensV2");
 	}
 
 	// Core text counting - the main workhorse
@@ -145,10 +128,8 @@ class TokenCounter {
 			}
 		}
 
-		// Fallback to estimation using file metadata
-		tokens = this.estimateFileTokens(fileMetadata);
-		await this.fileTokenCache.set(cacheKey, tokens);
-		return tokens;
+		// Fallback to estimation using file metadata (free, so not cached)
+		return this.estimateFileTokens(fileMetadata);
 	}
 
 	// Estimate file tokens based on type
@@ -158,7 +139,8 @@ class TokenCounter {
 			const height = fileMetadata.preview_asset.image_height;
 			return Math.min(1600, Math.ceil((width * height) / 750));
 		} else if (fileMetadata.file_kind === "document") {
-			return 2250 * fileMetadata.document_asset.page_count;
+			// claude.ai's own figure (a flat 1,570 per page, 2026-10).
+			return fileMetadata.document_asset.token_count ?? 2250 * fileMetadata.document_asset.page_count;
 		}
 		return 0;
 	}
@@ -277,13 +259,16 @@ class TokenStorageManager {
 	}
 
 	async addOrgId(orgId) {
+		if (!orgId) return; // a page that loaded before claude.ai set its org cookie
 		// Always write to refresh the TTL on every sighting.
 		await this.knownOrgs.set(orgId, true, KNOWN_ORG_TTL_MS);
 	}
 
 	// Non-expired orgs we've seen recently (entries() prunes expired keys on read).
 	async getKnownOrgIds() {
-		return (await this.knownOrgs.entries()).map(([orgId]) => orgId);
+		// filter: older builds could store a null org (see addOrgId) that lingers until its TTL runs
+		// out; removable a week after this ships
+		return (await this.knownOrgs.entries()).map(([orgId]) => orgId).filter(Boolean);
 	}
 
 	async getTotalTokens() {

@@ -1,8 +1,3 @@
-/* global CONFIG, Log, ProgressBar, sendBackgroundMessage, getActiveOrgId,
-   setupTooltip, getTooltipPortal, getResetTimeHTML, sleep, isMobileView, isCodePage, UsageData, isPeakHours,
-   RED_WARNING, BLUE_HIGHLIGHT, SUCCESS_GREEN, SELECTORS, LayoutManager, mountToAnchor,
-   localize, fmtNum, localeForIntl, onSsePartialUsage, shouldApplySseSession,
-   SIDEBAR_DISPLAY_KEY, getSidebarDisplayPrefs, isSidebarItemVisible */
 'use strict';
 
 // A limit whose reset time has passed needs fresh data from the server to clear. The server does
@@ -115,9 +110,9 @@ class UsageSection {
 			if (limit.key === 'session' && isPeakHours()) cap = cap / CONFIG.PEAK_SESSION_MULTIPLIER;
 			if (cap) {
 				const used = Math.round((limit.percentage / 100) * cap);
-				progressBar.tooltip.textContent = localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: limit.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: limit.percentage.toFixed(0) }));
 			} else {
-				progressBar.tooltip.textContent = localize('usage.tooltip_pct_used', { pct: limit.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_pct_used', { pct: limit.percentage.toFixed(0) }));
 			}
 
 			const color = limit.percentage >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
@@ -148,7 +143,7 @@ class UsageSection {
 
 			const usedDollars = (used / 100).toFixed(2);
 			const totalDollars = (effectiveTotal / 100).toFixed(2);
-			progressBar.tooltip.textContent = localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars });
+			progressBar.tooltip.updateText(localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars }));
 
 			const color = pct >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
 			percentage.textContent = `${pct.toFixed(0)}%`;
@@ -277,8 +272,6 @@ class UsageUI {
 
 		// Sub-component
 		this.usageSection = null;
-		this.notesTextarea = null;
-		this.notesSaveTimer = null;
 
 		this.uiReady = false;
 		this.pendingUpdate = null;
@@ -340,15 +333,11 @@ class UsageUI {
 		this.elements.sidebar = await this.createSidebarElements();
 		this.elements.chat = this.createChatElements();
 		this.elements.tooltips = this.createTooltips();
-		this.attachTooltips();
 		this.setCollapsed(this.state.collapsed, false);
 		this.applySidebarDisplay();
 
 		this.uiReady = true;
 		await Log('UsageUI: Ready');
-
-		// Load notes for current account
-		this.loadNotes();
 
 		// Process pending update (only most recent matters)
 		if (this.pendingUpdate) {
@@ -376,31 +365,33 @@ class UsageUI {
 		sectionsContainer.appendChild(this.usageSection.elements.container);
 		content.appendChild(sectionsContainer);
 
-		// Notes container
-		const notesContainer = document.createElement('div');
-		notesContainer.className = 'ut-container ut-notes-container mt-4';
-		notesContainer.style.marginTop = '1rem';
+		if (window.UsageOSNotes) content.appendChild(window.UsageOSNotes.create());  // USAGEOS-HOOK:ui-notes
+		// Add footers
+		let desktopFooter = null;
+		let qolFooter = null;
+		const isElectron = await sendBackgroundMessage({ type: 'isElectron' });
+		if (!isElectron) {
+			desktopFooter = this.createDesktopFooter();
+			content.appendChild(desktopFooter);
 
-		const notesLabel = document.createElement('h4');
-		notesLabel.className = 'ut-notes-label text-xs text-text-400 mb-1';
-		notesLabel.textContent = 'Notes';
+			qolFooter = this.createQoLFooter();
+			if (qolFooter) {
+				content.appendChild(qolFooter);
+			}
+		}
 
-		this.notesTextarea = document.createElement('textarea');
-		this.notesTextarea.className = 'ut-notes-textarea bg-bg-000 border border-border-400 text-text-000 ut-input text-xs resize-none';
-		this.notesTextarea.style.cssText = 'width: 100%; min-height: 80px; padding: 8px; border-radius: 6px; font-family: inherit;';
-		this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-		this.notesTextarea.disabled = true;
+		// Built on every platform, Electron included: unlike the desktop/QoL links a bug report
+		// is relevant wherever the extension runs.
+		const bugFooter = this.createBugFooter();
+		content.appendChild(bugFooter);
 
-		this.notesTextarea.addEventListener('input', () => this.handleNotesInput());
-
-		notesContainer.appendChild(notesLabel);
-		notesContainer.appendChild(this.notesTextarea);
-		content.appendChild(notesContainer);
+		const donateFooter = this.createDonateFooter();
+		content.appendChild(donateFooter);
 
 		container.appendChild(header);
 		container.appendChild(content);
 
-		const elements = { container, content, toggle };
+		const elements = { container, content, toggle, desktopFooter, qolFooter, bugFooter };
 		toggle.addEventListener('click', () => this.setCollapsed(!this.state.collapsed));
 
 		return elements;
@@ -446,10 +437,7 @@ class UsageUI {
 		`;
 
 		settingsButton.addEventListener('click', () => {
-			const buttonRect = settingsButton.getBoundingClientRect();
-			document.dispatchEvent(new CustomEvent('ut:toggleSettings', {
-				detail: { position: { top: buttonRect.top - 5, left: buttonRect.right + 5 } }
-			}));
+			document.dispatchEvent(new CustomEvent('ut:toggleSettings'));
 		});
 
 		header.appendChild(toggle);
@@ -463,8 +451,25 @@ class UsageUI {
 		const prefs = this.state.sidebarDisplay;
 
 		this.usageSection.hiddenKeys = new Set(
-			Object.keys(prefs).filter(key => key !== 'desktopLink' && !isSidebarItemVisible(prefs, key))
+			Object.keys(prefs).filter(key => !SIDEBAR_LINK_KEYS.includes(key) && !isSidebarItemVisible(prefs, key))
 		);
+
+		// Absent on Electron, where the footers are never built.
+		const desktopFooter = this.elements.sidebar?.desktopFooter;
+		if (desktopFooter) {
+			desktopFooter.style.display = isSidebarItemVisible(prefs, 'desktopLink') ? '' : 'none';
+		}
+
+		// Possibly detached by checkQoLInstalled() when QoL is present; styling it then is harmless.
+		const qolFooter = this.elements.sidebar?.qolFooter;
+		if (qolFooter) {
+			qolFooter.style.display = isSidebarItemVisible(prefs, 'qolLink') ? '' : 'none';
+		}
+
+		const bugFooter = this.elements.sidebar?.bugFooter;
+		if (bugFooter) {
+			bugFooter.style.display = isSidebarItemVisible(prefs, 'bugLink') ? '' : 'none';
+		}
 
 		if (this.state.usageData) this.renderAll();
 	}
@@ -497,62 +502,67 @@ class UsageUI {
 		if (persist) browser.storage.local.set({ usageSectionCollapsed: collapsed });
 	}
 
-	// ========== NOTES ==========
+	createDesktopFooter() {
+		const footer = document.createElement('div');
+		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1';
 
-	async loadNotes() {
-		if (!this.notesTextarea) return;
+		const link = document.createElement('a');
+		link.href = 'https://github.com/lugia19/claude-webext-patcher';
+		link.target = '_blank';
+		link.className = 'ut-link hover:text-text-200';
+		link.style.color = BLUE_HIGHLIGHT;
+		link.textContent = '💻 ' + localize('usage.footer_desktop');
 
-		const orgId = getActiveOrgId();
-		if (!orgId) {
-			this.notesTextarea.placeholder = 'Notes unavailable — no active account';
-			this.notesTextarea.disabled = true;
-			return;
-		}
-
-		try {
-			const result = await sendBackgroundMessage({ type: 'getAllAccountsFromBackend' });
-			if (!result?.ok || !result?.data?.length) {
-				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-				this.notesTextarea.disabled = true;
-				return;
-			}
-
-			const account = result.data.find(a => a.org_id === orgId);
-			if (!account) {
-				this.notesTextarea.placeholder = 'Notes unavailable — account not yet synced';
-				this.notesTextarea.disabled = true;
-				return;
-			}
-
-			this.currentAccountId = account.id;
-			this.notesTextarea.disabled = false;
-			this.notesTextarea.placeholder = 'Add notes for this account...';
-			this.notesTextarea.value = account.note || '';
-
-		} catch (err) {
-			await Log('UsageUI: Failed to load notes:', err);
-			this.notesTextarea.placeholder = 'Failed to load notes';
-			this.notesTextarea.disabled = true;
-		}
+		footer.appendChild(link);
+		return footer;
 	}
 
-	handleNotesInput() {
-		if (this.notesSaveTimer) clearTimeout(this.notesSaveTimer);
-		this.notesSaveTimer = setTimeout(() => this.saveNotes(), 800);
+	createQoLFooter() {
+		const footer = document.createElement('div');
+		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1 ut-qol-footer';
+
+		const isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
+		const link = document.createElement('a');
+		link.href = isChrome
+			? 'https://chromewebstore.google.com/detail/claude-qol/dkdnancajokhfclpjpplkhlkbhaeejob'
+			: 'https://addons.mozilla.org/en-US/firefox/addon/claude-qol/';
+		link.target = '_blank';
+		link.className = 'ut-link hover:text-text-200';
+		link.style.color = BLUE_HIGHLIGHT;
+		link.textContent = '⚡ ' + localize('usage.footer_qol');
+
+		footer.appendChild(link);
+		return footer;
 	}
 
-	async saveNotes() {
-		if (!this.notesTextarea || this.notesTextarea.disabled || !this.currentAccountId) return;
+	createBugFooter() {
+		const footer = document.createElement('div');
+		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1';
 
-		const content = this.notesTextarea.value;
-		try {
-			const result = await sendBackgroundMessage({ type: 'putNote', orgId: getActiveOrgId(), content });
-			if (!result?.ok) {
-				await Log('UsageUI: Failed to save note:', result?.reason);
-			}
-		} catch (err) {
-			await Log('UsageUI: Failed to save note:', err);
-		}
+		const link = document.createElement('a');
+		link.href = 'https://github.com/lugia19/Claude-Usage-Extension/issues';
+		link.target = '_blank';
+		link.className = 'ut-link hover:text-text-200';
+		link.style.color = BLUE_HIGHLIGHT;
+		link.textContent = '🐛 ' + localize('usage.footer_bug');
+
+		footer.appendChild(link);
+		return footer;
+	}
+
+	createDonateFooter() {
+		const footer = document.createElement('div');
+		footer.className = 'ut-desktop-footer ut-sidebar-footer mt-1';
+
+		const link = document.createElement('a');
+		link.href = 'https://ko-fi.com/lugia19';
+		link.target = '_blank';
+		link.className = 'ut-link';
+		link.style.cssText = 'background: #2c84db; color: white; padding: 2px 6px; border-radius: 4px; display: inline-block;';
+		link.textContent = '☕ ' + localize('usage.footer_kofi');
+
+		footer.appendChild(link);
+		return footer;
 	}
 
 	createChatElements() {
@@ -565,19 +575,19 @@ class UsageUI {
 		// Left container (usage)
 		const leftContainer = document.createElement('div');
 		leftContainer.id = 'ut-stat-left';
-		leftContainer.className = 'ut-row ut-flex-1';
+		leftContainer.className = 'ut-row ut-statline-left';
 
 		const usageDisplay = document.createElement('div');
 		usageDisplay.className = 'text-text-400 text-xs';
 		usageDisplay.style.whiteSpace = 'nowrap';
-		if (!isMobileView()) usageDisplay.style.marginRight = '8px';
+		if (!isMobileLayout()) usageDisplay.style.marginRight = '8px';
 		usageDisplay.textContent = localize('usage.session_inline');
 
 		leftContainer.appendChild(usageDisplay);
 
 		// Progress bar (desktop only)
 		let progressBar = null;
-		if (!isMobileView()) {
+		if (!isMobileLayout()) {
 			progressBar = new ProgressBar({ width: '100%' });
 			progressBar.track.classList.remove('bg-bg-500');
 			progressBar.track.classList.add('bg-bg-200');
@@ -602,7 +612,7 @@ class UsageUI {
 		// Reset time display
 		const resetDisplay = document.createElement('div');
 		resetDisplay.className = 'text-text-400 text-xs';
-		if (!isMobileView()) resetDisplay.style.marginRight = '8px';
+		if (!isMobileLayout()) resetDisplay.style.marginRight = '8px';
 
 		rightContainer.appendChild(peakIndicator);
 		rightContainer.appendChild(resetDisplay);
@@ -615,37 +625,22 @@ class UsageUI {
 	}
 
 	createTooltips() {
-		const create = (text) => {
-			const tooltip = document.createElement('div');
-			tooltip.className = 'bg-[var(--cds-tooltip-bg)] text-[var(--cds-tooltip-fg)] ut-tooltip font-normal font-ui shadow-sm dark:shadow-panel-sm';
-			tooltip.textContent = text;
-			tooltip.style.maxWidth = '400px';
-			tooltip.style.textAlign = 'left';
-			tooltip.style.whiteSpace = 'pre-line';
-			getTooltipPortal().appendChild(tooltip);
-			return tooltip;
-		};
-
 		// Convert peak hours (1pm-7pm GMT) to user's local timezone
 		const formatLocal = (utcHour) => {
 			const d = new Date();
 			d.setUTCHours(utcHour, 0, 0, 0);
-			return d.toLocaleTimeString(localeForIntl(), { hour: 'numeric', minute: '2-digit' });
+			return d.toLocaleTimeString(currentLocale(), { hour: 'numeric', minute: '2-digit' });
 		};
 		const peakStart = formatLocal(12);
 		const peakEnd = formatLocal(18);
 
+		const { chat } = this.elements;
+		for (const el of [chat.usageDisplay, chat.resetDisplay, chat.peakIndicator]) el.style.cursor = 'help';
 		return {
-			usage: create(localize('usage.tooltip_usage')),
-			timer: create(localize('usage.tooltip_timer')),
-			peak: create(localize('usage.tooltip_peak', { start: peakStart, end: peakEnd })),
+			usage: createClaudeTooltip(chat.usageDisplay, localize('usage.tooltip_usage')),
+			timer: createClaudeTooltip(chat.resetDisplay, localize('usage.tooltip_timer')),
+			peak: createClaudeTooltip(chat.peakIndicator, localize('usage.tooltip_peak', { start: peakStart, end: peakEnd })),
 		};
-	}
-
-	attachTooltips() {
-		setupTooltip(this.elements.chat.usageDisplay, this.elements.tooltips.usage);
-		setupTooltip(this.elements.chat.resetDisplay, this.elements.tooltips.timer);
-		setupTooltip(this.elements.chat.peakIndicator, this.elements.tooltips.peak);
 	}
 
 	// ========== MOUNT (attach to page) ==========
@@ -675,65 +670,107 @@ class UsageUI {
 		this.usageSection.render(usageData);
 	}
 
+	// The stat line row collapses to nothing once its children are hidden, so the container itself
+	// stays in the DOM and LengthUI.mountStatLine() keeps finding #ut-stat-right.
+	setChatUsageVisible(visible) {
+		const { usageDisplay, progressBar, peakIndicator, resetDisplay } = this.elements.chat;
+		const display = visible ? '' : 'none';
+
+		usageDisplay.style.display = display;
+		if (progressBar) progressBar.container.style.display = display;
+
+		// The countdown belongs to the primary limit, so it tracks that rather than the row as a
+		// whole. The credits branch can render with no plan limit at all on a credit-funded model,
+		// and would otherwise print "Reset in: Not set" beside a perfectly good Extra usage bar. Same
+		// condition renderResetTimes() uses, so the two can't disagree about it.
+		resetDisplay.style.display = visible && this.chatPrimaryKey ? '' : 'none';
+
+		// Owned by the render branches below while visible; forced off here so it can't outlive them.
+		if (!visible) peakIndicator.style.display = 'none';
+	}
+
 	renderChatArea() {
 		const { usageData } = this.state;
 		const { usageDisplay, progressBar, peakIndicator, resetDisplay } = this.elements.chat;
 
 		if (!usageData) return;
 
-		const session = usageData.limits.session;
-		if (!session) return;
+		// Read the picker directly rather than this.state.currentModel, which stays null until
+		// checkModelChange() first polls (up to 1s after mount). Reused for the weekly marker below.
+		const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
+		const modelName = modelSelector?.textContent?.trim() || null;
 
-		const sessionMaxed = session.percentage >= 100;
+		// The session limit, or on a plan without one (Ultra) the binding weekly limit. Read by
+		// setChatUsageVisible() and renderResetTimes() as well, so all three agree on it.
+		const primary = usageData.getPrimaryLimit(modelName);
+		this.chatPrimaryKey = primary?.key ?? null;
 
-		// When session is maxed and extra usage is available, show extra usage instead
-		if (sessionMaxed && usageData.hasExtraUsage()) {
+		// Nothing to price this against (the free plan, where /usage reports no limits at all).
+		// Returning here without touching the DOM would leave whatever was last written on screen:
+		// that is how a free account ended up showing a stale "Session: 2%" - set by an SSE partial
+		// a moment earlier - next to "Reset in: Not set". Hide the usage half outright instead.
+		const hasUsage = !!primary || usageData.isSpendingCredits(modelName);
+		this.setChatUsageVisible(hasUsage);
+		if (!hasUsage) return;
+
+		const isSession = primary?.key === 'session';
+		const { tooltips } = this.elements;
+		tooltips.usage.updateText(localize(isSession ? 'usage.tooltip_usage' : 'usage.tooltip_usage_weekly'));
+		tooltips.timer.updateText(localize(isSession ? 'usage.tooltip_timer' : 'usage.tooltip_timer_weekly'));
+
+		// Show extra usage instead of the session bar whenever credits are what's being spent —
+		// either the plan limits are maxed, or the selected model is credit-funded (e.g. Fable
+		// on a tier where it has no plan-scoped weekly limit).
+		if (usageData.isSpendingCredits(modelName)) {
 			const effectiveTotal = usageData.getExtraUsageEffectiveTotal();
 			const used = usageData.extraUsage.usedCredits;
 			const pct = effectiveTotal > 0 ? (used / effectiveTotal) * 100 : 0;
 
 			const color = pct >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
-			usageDisplay.innerHTML = `${localize('usage.extra_inline')} <span style="color: ${color}">${pct.toFixed(0)}%</span>`;
+			usageDisplay.innerHTML = `${localize('usage.extra_inline')} <span class="ut-statline-pct" style="color: ${color}">${pct.toFixed(0)}%</span>`;
 			peakIndicator.style.display = 'none';
 
-			if (!isMobileView() && progressBar) {
+			if (!isMobileLayout() && progressBar) {
 				progressBar.updateProgress(pct, 100);
 
 				const usedDollars = (used / 100).toFixed(2);
 				const totalDollars = (effectiveTotal / 100).toFixed(2);
-				progressBar.tooltip.textContent = localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars });
+				progressBar.tooltip.updateText(localize('usage.tooltip_dollars', { used: usedDollars, total: totalDollars }));
 				progressBar.clearMarker();
 			}
 
-			// Show session reset time (still relevant — when session resets, user goes back to included usage)
-			const resetInfo = usageData.getSessionResetInfo();
-			resetDisplay.innerHTML = getResetTimeHTML(resetInfo);
+			// Show the primary limit's reset time (still relevant — when it resets, the user goes back
+			// to included usage)
+			resetDisplay.innerHTML = getResetTimeHTML(usageData.getResetInfo(this.chatPrimaryKey));
 			return;
 		}
 
-		// Normal session display
-		const color = session.percentage >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
-		usageDisplay.innerHTML = `${localize('usage.session_inline')} <span style="color: ${color}">${session.percentage.toFixed(0)}%</span>`;
-		peakIndicator.style.display = isPeakHours() ? '' : 'none';
+		// Normal display: the session, or the binding weekly limit on a plan without one
+		const pct = primary.percentage;
+		const label = isSession ? localize('usage.session_inline') : this.usageSection.getLimitLabel(primary.key);
+		const color = pct >= CONFIG.WARNING_THRESHOLD * 100 ? RED_WARNING : BLUE_HIGHLIGHT;
+		usageDisplay.innerHTML = `${label} <span class="ut-statline-pct" style="color: ${color}">${pct.toFixed(0)}%</span>`;
+		// Peak hours shrink the session cap only, so the indicator means nothing beside a weekly bar.
+		const peak = isSession && isPeakHours();
+		peakIndicator.style.display = peak ? '' : 'none';
 
 		// Progress bar (desktop only)
-		if (!isMobileView() && progressBar) {
-			progressBar.updateProgress(session.percentage, 100);
+		if (!isMobileLayout() && progressBar) {
+			progressBar.updateProgress(pct, 100);
 
 			// Override tooltip with estimated token values
-			let cap = CONFIG.ESTIMATED_CAPS?.[usageData.subscriptionTier]?.session;
-			if (isPeakHours()) cap = cap / CONFIG.PEAK_SESSION_MULTIPLIER;
+			let cap = CONFIG.ESTIMATED_CAPS?.[usageData.subscriptionTier]?.[primary.key];
+			if (peak) cap = cap / CONFIG.PEAK_SESSION_MULTIPLIER;
 			if (cap) {
-				const used = Math.round((session.percentage / 100) * cap);
-				progressBar.tooltip.textContent = localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: session.percentage.toFixed(0) });
+				const used = Math.round((pct / 100) * cap);
+				progressBar.tooltip.updateText(localize('usage.tooltip_tokens', { used: fmtNum(used), cap: fmtNum(cap), pct: pct.toFixed(0) }));
 			} else {
-				progressBar.tooltip.textContent = localize('usage.tooltip_pct_used', { pct: session.percentage.toFixed(0) });
+				progressBar.tooltip.updateText(localize('usage.tooltip_pct_used', { pct: pct.toFixed(0) }));
 			}
 
-			// Add weekly marker (filter by current model)
-			const modelSelector = document.querySelector(SELECTORS.MODEL_SELECTOR);
-			const modelName = modelSelector?.textContent?.trim() || null;
-			const weeklyLimit = usageData.getBindingWeeklyLimit(modelName);
+			// Weekly marker (filter by current model). Only on a session bar: when the bar already
+			// is the binding weekly limit, the marker would sit exactly on its own fill.
+			const weeklyLimit = isSession ? usageData.getBindingWeeklyLimit(modelName) : null;
 			if (weeklyLimit) {
 				const markerKeys = { weekly: 'usage.marker_all', sonnetWeekly: 'usage.marker_sonnet', opusWeekly: 'usage.marker_opus', fableWeekly: 'usage.marker_fable' };
 				const markerName = markerKeys[weeklyLimit.key] ? localize(markerKeys[weeklyLimit.key]) : localize('usage.marker_fallback');
@@ -744,9 +781,8 @@ class UsageUI {
 			}
 		}
 
-		// Reset time (session)
-		const resetInfo = usageData.getSessionResetInfo();
-		resetDisplay.innerHTML = getResetTimeHTML(resetInfo);
+		// Reset time (primary limit)
+		resetDisplay.innerHTML = getResetTimeHTML(usageData.getResetInfo(this.chatPrimaryKey));
 	}
 
 	renderResetTimes() {
@@ -756,9 +792,10 @@ class UsageUI {
 		// Sidebar
 		this.usageSection.renderResetTimes(usageData);
 
-		// Chat area
-		const resetInfo = usageData.getSessionResetInfo();
-		this.elements.chat.resetDisplay.innerHTML = getResetTimeHTML(resetInfo);
+		// Chat area. Skipped with no primary limit: this runs every second and would otherwise keep
+		// writing "Reset in: Not set" into the display renderChatArea() hid.
+		if (!this.chatPrimaryKey) return;
+		this.elements.chat.resetDisplay.innerHTML = getResetTimeHTML(usageData.getResetInfo(this.chatPrimaryKey));
 	}
 
 	// ========== MESSAGE HANDLERS ==========
@@ -854,6 +891,16 @@ class UsageUI {
 		}
 	}
 
+	checkQoLInstalled() {
+		const hasQoL = document.documentElement.hasAttribute('data-claude-qol-installed');
+		if (hasQoL) {
+			const qolFooter = this.elements.sidebar?.container?.querySelector('.ut-qol-footer');
+			if (qolFooter) {
+				qolFooter.remove();
+			}
+		}
+	}
+
 	// ========== UPDATE LOOP ==========
 
 	startUpdateLoop() {
@@ -864,6 +911,7 @@ class UsageUI {
 				this.checkExpiredLimits();
 				this.checkModelChange();
 				this.checkPeakHoursChange();
+				this.checkQoLInstalled();
 				this.mountSidebar();
 				this.mountChatArea();
 			}

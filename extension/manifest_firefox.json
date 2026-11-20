@@ -1,12 +1,12 @@
 {
 	"manifest_version": 3,
 	"name": "UsageOS Tracker",
-	"version": "6.1.4",
+	"version": "6.1.5",
 	"description": "Tracks your claude.ai usage across accounts and syncs it to your self-hosted UsageOS dashboard. Based on Claude Usage Tracker by lugia19 (GPL-3.0).",
 	"author": "UsageOS (fork of lugia19/Claude-Usage-Extension)",
 	"browser_specific_settings": {
 		"gecko": {
-			"id": "usageos-tracker@usageos.local",
+			"id": "claude_usage_tracker@lugia19.com",
 			"strict_min_version": "128.0"
 		}
 	},
@@ -47,6 +47,7 @@
 				"content-components/electron_reciever.js",
 				"content-components/ui_dataclasses.js",
 				"content-components/notification_card.js",
+				"content-components/fork_notes.js",
 				"content-components/usage_ui.js",
 				"content-components/length_ui.js"
 			]
@@ -85,11 +86,16 @@
 	"web_accessible_resources": [
 		{
 			"resources": [
+				"default-config.json",
 				"lib/browser-polyfill.min.js",
 				"lib/o200k_base.js",
+				"common/assets/kofi-button.png",
 				"common/log/viewer.html",
 				"common/log/viewer.js",
-				"tracker-styles.css"
+				"update_patchnotes.txt",
+				"tracker-styles.css",
+				"qol-badge.png",
+				"common/assets/rate-badge.png"
 			],
 			"matches": [
 				"<all_urls>"
