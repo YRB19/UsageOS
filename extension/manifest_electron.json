@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "UsageOS Tracker",
-	"version": "6.1.5",
+	"version": "6.2.1",
 	"description": "Tracks your claude.ai usage across accounts and syncs it to your self-hosted UsageOS dashboard. Based on Claude Usage Tracker by lugia19 (GPL-3.0).",
 	"author": "UsageOS (fork of lugia19/Claude-Usage-Extension)",
 	"browser_specific_settings": {

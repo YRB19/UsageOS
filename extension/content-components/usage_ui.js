@@ -589,8 +589,6 @@ class UsageUI {
 		let progressBar = null;
 		if (!isMobileLayout()) {
 			progressBar = new ProgressBar({ width: '100%' });
-			progressBar.track.classList.remove('bg-bg-500');
-			progressBar.track.classList.add('bg-bg-200');
 			leftContainer.appendChild(progressBar.container);
 		}
 
@@ -625,14 +623,15 @@ class UsageUI {
 	}
 
 	createTooltips() {
-		// Convert peak hours (1pm-7pm GMT) to user's local timezone
+		// Peak hours (weekdays 5-11 AM Pacific) in the user's local timezone
 		const formatLocal = (utcHour) => {
 			const d = new Date();
 			d.setUTCHours(utcHour, 0, 0, 0);
 			return d.toLocaleTimeString(currentLocale(), { hour: 'numeric', minute: '2-digit' });
 		};
-		const peakStart = formatLocal(12);
-		const peakEnd = formatLocal(18);
+		const [peakStartUTC, peakEndUTC] = peakWindowUTC();
+		const peakStart = formatLocal(peakStartUTC);
+		const peakEnd = formatLocal(peakEndUTC);
 
 		const { chat } = this.elements;
 		for (const el of [chat.usageDisplay, chat.resetDisplay, chat.peakIndicator]) el.style.cursor = 'help';
